@@ -163,12 +163,51 @@ class DonnaRuntime:
 
         return user
 
+    def _should_search_memory(self, message: str) -> bool:
+        """Determine if we should search memory for this message.
+
+        Skip memory search for simple greetings and short messages
+        to reduce latency on trivial interactions.
+        """
+        # Simple greetings that don't need memory
+        simple_patterns = {
+            "hi", "hello", "hey", "yo", "sup", "hola", "namaste",
+            "good morning", "good afternoon", "good evening", "good night",
+            "gm", "gn", "thanks", "thank you", "ok", "okay", "bye", "goodbye",
+            "yes", "no", "yep", "nope", "sure", "cool", "nice", "great",
+        }
+
+        msg_lower = message.lower().strip()
+
+        # Skip for very short messages (likely greetings)
+        if len(msg_lower) < 4:
+            return False
+
+        # Skip for known greetings
+        if msg_lower in simple_patterns:
+            return False
+
+        # Skip if message starts with common greeting
+        for pattern in simple_patterns:
+            if msg_lower.startswith(pattern + " ") or msg_lower.startswith(pattern + "!"):
+                # But search if it has a question (e.g., "hi, what's pranjal's number?")
+                if "?" in message or any(word in msg_lower for word in ["what", "who", "when", "where", "how", "do you know", "have you"]):
+                    return True
+                return False
+
+        return True
+
     async def _search_relevant_memories(self, message: str) -> List[Dict[str, Any]]:
         """Auto-search memory for anything relevant to the user's message.
 
         This is called BEFORE the LLM to inject relevant context.
         """
         if not self.memory:
+            return []
+
+        # Skip memory search for simple messages to reduce latency
+        if not self._should_search_memory(message):
+            logger.info(f"Skipping memory search for simple message: {message[:30]}...")
             return []
 
         try:

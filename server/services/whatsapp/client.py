@@ -98,17 +98,17 @@ class WhatsAppClient:
 _whatsapp_client: Optional[WhatsAppClient] = None
 
 
-def get_whatsapp_client() -> WhatsAppClient:
-    """Get the singleton WhatsApp client."""
+def get_whatsapp_client() -> Optional[WhatsAppClient]:
+    """Get the singleton WhatsApp client. Returns None if not configured."""
     global _whatsapp_client
     if _whatsapp_client is None:
         phone_number_id = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
         access_token = os.getenv("WHATSAPP_ACCESS_TOKEN")
 
         if not phone_number_id or not access_token:
-            raise ValueError(
-                "WhatsApp not configured. Set WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_ACCESS_TOKEN"
-            )
+            # WhatsApp not configured - n8n handles sending
+            logger.info("WhatsApp client not configured - n8n will handle message sending")
+            return None
 
         _whatsapp_client = WhatsAppClient(phone_number_id, access_token)
 

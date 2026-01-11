@@ -1,0 +1,150 @@
+{
+  "name": "Donna WhatsApp Relay",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "whatsappmeta",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-verify",
+      "name": "Meta Webhook Verify",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "meta-whatsapp-verify"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.query['hub.verify_token'] }}",
+              "rightValue": "my_secret_token",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-token",
+      "name": "Check Verify Token",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.query['hub.challenge'] }}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "return-challenge",
+      "name": "Return Challenge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [440, -80]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "Forbidden",
+        "options": { "responseCode": 403 }
+      },
+      "id": "return-forbidden",
+      "name": "Return Forbidden",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [440, 80]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsappmeta",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "whatsapp-webhook",
+      "name": "WhatsApp Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "meta-whatsapp-messages"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "OK",
+        "options": { "responseCode": 200 }
+      },
+      "id": "ack-webhook",
+      "name": "Acknowledge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Meta WhatsApp Cloud API payload\nconst body = $input.first().json.body || {};\n\n// Handle status updates (ignore them)\nconst entry = body.entry?.[0];\nconst changes = entry?.changes?.[0];\nconst value = changes?.value || {};\n\n// Check if this is a message or just a status update\nif (!value.messages || value.messages.length === 0) {\n  console.log('No messages - status update, skipping');\n  return [];\n}\n\nconst messages = value.messages || [];\nconst contacts = value.contacts || [];\n\nconst message = messages[0] || {};\nconst contact = contacts[0] || {};\n\n// Filter out reactions, read receipts, etc.\nconst ignoredTypes = ['reaction', 'read', 'delivery', 'sent'];\nif (ignoredTypes.includes(message.type)) {\n  console.log(`Ignoring message type: ${message.type}`);\n  return [];\n}\n\n// Extract phone number (remove + prefix)\nconst phone = (message.from || '').replace(/^\\+/, '');\n\n// Get message content based on type\nlet messageText = '';\nconst messageType = message.type || 'text';\n\nif (messageType === 'text') {\n  messageText = message.text?.body || '';\n} else if (messageType === 'audio') {\n  // For audio, we'd need transcription - for now just note it\n  messageText = '[Voice message received - transcription needed]';\n} else if (messageType === 'image') {\n  messageText = message.image?.caption || '[Image received]';\n} else if (messageType === 'document') {\n  messageText = message.document?.caption || '[Document received]';\n} else if (messageType === 'contacts') {\n  const sharedContacts = message.contacts || [];\n  if (sharedContacts.length > 0) {\n    const contactInfo = sharedContacts.map(c => {\n      const name = c.name?.formatted_name || 'Unknown';\n      const phones = c.phones?.map(p => p.phone).join(', ') || 'No phone';\n      return `${name} (${phones})`;\n    }).join('; ');\n    messageText = `[Contact shared: ${contactInfo}]`;\n  }\n} else {\n  messageText = `[${messageType} received]`;\n}\n\nconsole.log('Parsed message:', { phone, messageText, messageType });\n\nreturn {\n  json: {\n    phone: phone,\n    message: messageText,\n    profile_name: contact.profile?.name || '',\n    message_id: message.id || '',\n    message_type: messageType,\n    timestamp: new Date().toISOString()\n  }\n};"
+      },
+      "id": "parse-message",
+      "name": "Parse Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DONNA_API_URL }}/api/v1/whatsapp/webhook",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "call-donna",
+      "name": "Call Donna API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 300]
+    }
+  ],
+  "connections": {
+    "Meta Webhook Verify": {
+      "main": [[{ "node": "Check Verify Token", "type": "main", "index": 0 }]]
+    },
+    "Check Verify Token": {
+      "main": [
+        [{ "node": "Return Challenge", "type": "main", "index": 0 }],
+        [{ "node": "Return Forbidden", "type": "main", "index": 0 }]
+      ]
+    },
+    "WhatsApp Webhook": {
+      "main": [[{ "node": "Acknowledge", "type": "main", "index": 0 }]]
+    },
+    "Acknowledge": {
+      "main": [[{ "node": "Parse Message", "type": "main", "index": 0 }]]
+    },
+    "Parse Message": {
+      "main": [[{ "node": "Call Donna API", "type": "main", "index": 0 }]]
+    }
+  },
+  "meta": {
+    "description": "Simple relay workflow - receives WhatsApp messages from Meta and forwards to Donna API"
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

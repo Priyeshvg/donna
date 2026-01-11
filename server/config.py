@@ -1,4 +1,4 @@
-"""Simplified configuration management."""
+"""Simplified configuration management for Donna AI."""
 
 import os
 from functools import lru_cache
@@ -28,8 +28,8 @@ def _load_env_file() -> None:
 _load_env_file()
 
 
-DEFAULT_APP_NAME = "OpenPoke Server"
-DEFAULT_APP_VERSION = "0.3.0"
+DEFAULT_APP_NAME = "Donna AI Server"
+DEFAULT_APP_VERSION = "1.0.0"
 
 
 def _env_int(name: str, fallback: int) -> int:
@@ -47,25 +47,39 @@ class Settings(BaseModel):
     app_version: str = Field(default=DEFAULT_APP_VERSION)
 
     # Server runtime
-    server_host: str = Field(default=os.getenv("OPENPOKE_HOST", "0.0.0.0"))
-    server_port: int = Field(default=_env_int("OPENPOKE_PORT", 8001))
+    server_host: str = Field(default=os.getenv("DONNA_HOST", "0.0.0.0"))
+    server_port: int = Field(default=_env_int("DONNA_PORT", 8001))
 
     # LLM model selection
-    interaction_agent_model: str = Field(default="anthropic/claude-sonnet-4")
+    interaction_agent_model: str = Field(default=os.getenv("DONNA_MODEL", "anthropic/claude-sonnet-4"))
     execution_agent_model: str = Field(default="anthropic/claude-sonnet-4")
     execution_agent_search_model: str = Field(default="anthropic/claude-sonnet-4")
     summarizer_model: str = Field(default="anthropic/claude-sonnet-4")
     email_classifier_model: str = Field(default="anthropic/claude-sonnet-4")
 
-    # Credentials / integrations
+    # OpenRouter
     openrouter_api_key: Optional[str] = Field(default=os.getenv("OPENROUTER_API_KEY"))
-    composio_gmail_auth_config_id: Optional[str] = Field(default=os.getenv("COMPOSIO_GMAIL_AUTH_CONFIG_ID"))
+
+    # Composio (Gmail/Calendar)
     composio_api_key: Optional[str] = Field(default=os.getenv("COMPOSIO_API_KEY"))
+    composio_gmail_auth_config_id: Optional[str] = Field(default=os.getenv("COMPOSIO_GMAIL_AUTH_CONFIG_ID"))
+
+    # Nhost Database
+    nhost_graphql_endpoint: Optional[str] = Field(default=os.getenv("NHOST_GRAPHQL_ENDPOINT"))
+    nhost_admin_secret: Optional[str] = Field(default=os.getenv("NHOST_ADMIN_SECRET"))
+
+    # WhatsApp Meta API
+    whatsapp_phone_number_id: Optional[str] = Field(default=os.getenv("WHATSAPP_PHONE_NUMBER_ID"))
+    whatsapp_access_token: Optional[str] = Field(default=os.getenv("WHATSAPP_ACCESS_TOKEN"))
+
+    # Pinecone Vector Memory
+    pinecone_api_key: Optional[str] = Field(default=os.getenv("PINECONE_API_KEY"))
+    pinecone_index: str = Field(default=os.getenv("PINECONE_INDEX", "donna-memory"))
 
     # HTTP behaviour
-    cors_allow_origins_raw: str = Field(default=os.getenv("OPENPOKE_CORS_ALLOW_ORIGINS", "*"))
-    enable_docs: bool = Field(default=os.getenv("OPENPOKE_ENABLE_DOCS", "1") != "0")
-    docs_url: Optional[str] = Field(default=os.getenv("OPENPOKE_DOCS_URL", "/docs"))
+    cors_allow_origins_raw: str = Field(default=os.getenv("DONNA_CORS_ALLOW_ORIGINS", "*"))
+    enable_docs: bool = Field(default=os.getenv("DONNA_ENABLE_DOCS", "1") != "0")
+    docs_url: Optional[str] = Field(default=os.getenv("DONNA_DOCS_URL", "/docs"))
 
     # Summarisation controls
     conversation_summary_threshold: int = Field(default=100)

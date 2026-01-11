@@ -10,6 +10,7 @@ from ...config import get_settings
 from ...logging_config import logger
 from ...services.llm import get_llm_client
 from ...services.database import get_database_client, User, Chat
+from ...services.memory import get_memory_client
 from .agent import DonnaAgent, SYSTEM_PROMPT, get_tools_schema
 
 
@@ -22,6 +23,7 @@ class DonnaRuntime:
         self.phone = phone
         self.db = get_database_client()
         self.llm = get_llm_client()
+        self.memory = get_memory_client()
         self.settings = get_settings()
         self.user: Optional[User] = None
         self.agent: Optional[DonnaAgent] = None
@@ -51,8 +53,12 @@ class DonnaRuntime:
             type="received"
         ))
 
-        # Build context
-        context = await self._build_context(message)
+        # AUTO-SEARCH MEMORY - This is the key fix!
+        # Search memory for relevant context BEFORE calling the LLM
+        relevant_memories = await self._search_relevant_memories(message)
+
+        # Build context with memories included
+        context = await self._build_context(message, relevant_memories)
 
         # Get recent chat history
         chat_history = await self._get_chat_history()
@@ -157,7 +163,30 @@ class DonnaRuntime:
 
         return user
 
-    async def _build_context(self, message: str) -> str:
+    async def _search_relevant_memories(self, message: str) -> List[Dict[str, Any]]:
+        """Auto-search memory for anything relevant to the user's message.
+
+        This is called BEFORE the LLM to inject relevant context.
+        """
+        if not self.memory:
+            return []
+
+        try:
+            # Search memory with the user's message
+            results = await self.memory.search(self.phone, message, top_k=5)
+
+            # Filter for high-relevance results (score > 0.7)
+            relevant = [r for r in results if r.get("score", 0) > 0.7]
+
+            if relevant:
+                logger.info(f"Found {len(relevant)} relevant memories for: {message[:30]}...")
+
+            return relevant
+        except Exception as e:
+            logger.error(f"Memory search failed: {e}")
+            return []
+
+    async def _build_context(self, message: str, memories: Optional[List[Dict[str, Any]]] = None) -> str:
         """Build context string for the LLM."""
         now = datetime.now()
         ist_time = now.strftime("%A, %B %d, %Y at %I:%M %p")
@@ -165,7 +194,8 @@ class DonnaRuntime:
         tomorrow = (now.replace(hour=0, minute=0, second=0) +
                    __import__('datetime').timedelta(days=1)).strftime("%Y-%m-%d")
 
-        user_name = self.user.name or "there"
+        # Use stored name from DB, not WhatsApp profile name
+        user_name = self.user.name if self.user.name else None
         onboarding = self.user.onboarding or {}
 
         onboarding_info = (
@@ -175,11 +205,39 @@ class DonnaRuntime:
             f"preference_asked={onboarding.get('preference_asked', False)}"
         )
 
+        # Build memories section
+        memories_section = ""
+        if memories:
+            memories_text = []
+            for mem in memories:
+                # Handle both 'content' and 'text' fields (legacy support)
+                content = mem.get("content") or mem.get("metadata", {}).get("text", "")
+                score = mem.get("score", 0)
+                if content:
+                    memories_text.append(f"  • {content} (relevance: {score:.2f})")
+
+            if memories_text:
+                memories_section = f"""
+═══════════════════════════════════════════════════════════
+RELEVANT MEMORIES (auto-retrieved)
+═══════════════════════════════════════════════════════════
+{chr(10).join(memories_text)}
+
+IMPORTANT: Use this information to respond! If user asks about something
+mentioned here, USE this data - don't say you don't know.
+"""
+
+        # User info section
+        user_section = f"Phone: {self.phone}"
+        if user_name:
+            user_section = f"User: {user_name}\n{user_section}"
+        else:
+            user_section = f"User: (name not set yet)\n{user_section}"
+
         context = f"""═══════════════════════════════════════════════════════════
 CURRENT CONTEXT
 ═══════════════════════════════════════════════════════════
-User: {user_name}
-Phone: {self.phone}
+{user_section}
 Time: {ist_time}
 Default reminder method: {self.user.default_reminder_method}
 Onboarding: {onboarding_info}
@@ -189,7 +247,7 @@ Tomorrow: {tomorrow}
 Time format: YYYY-MM-DDTHH:mm:ss+05:30
 
 User's message: "{message}"
-
+{memories_section}
 ═══════════════════════════════════════════════════════════
 SPECIAL HANDLING
 ═══════════════════════════════════════════════════════════

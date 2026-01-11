@@ -173,11 +173,14 @@ class MemoryClient:
 
             results = []
             for match in data.get("matches", []):
+                metadata = match.get("metadata", {})
+                # Support both 'content' (new) and 'text' (legacy) fields
+                content = metadata.get("content") or metadata.get("text", "")
                 results.append({
                     "id": match["id"],
                     "score": match["score"],
-                    "content": match.get("metadata", {}).get("content", ""),
-                    "metadata": match.get("metadata", {}),
+                    "content": content,
+                    "metadata": metadata,
                 })
 
             logger.info(f"Found {len(results)} memories for query: {query[:50]}...")

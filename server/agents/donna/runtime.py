@@ -173,10 +173,12 @@ class DonnaRuntime:
 
         try:
             # Search memory with the user's message
-            results = await self.memory.search(self.phone, message, top_k=5)
+            results = await self.memory.search(self.phone, message, top_k=10)
 
-            # Filter for high-relevance results (score > 0.7)
-            relevant = [r for r in results if r.get("score", 0) > 0.7]
+            # Filter for positive relevance scores (cosine similarity > 0)
+            # Note: text-embedding-3-small with 1024 dims produces low scores,
+            # so we accept anything with positive similarity
+            relevant = [r for r in results if r.get("score", 0) > 0.01]
 
             if relevant:
                 logger.info(f"Found {len(relevant)} relevant memories for: {message[:30]}...")

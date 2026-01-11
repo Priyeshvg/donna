@@ -57,11 +57,13 @@ class MemoryClient:
             raise ValueError("OPENROUTER_API_KEY required for embeddings")
 
         # Use OpenRouter's embedding endpoint
+        # IMPORTANT: Pinecone index is 1024 dimensions, so we must specify dimensions=1024
         response = await self._embedding_client.post(
             "https://openrouter.ai/api/v1/embeddings",
             json={
                 "model": "openai/text-embedding-3-small",
                 "input": text,
+                "dimensions": 1024,  # Match Pinecone index dimension
             },
             headers={
                 "Authorization": f"Bearer {openrouter_key}",

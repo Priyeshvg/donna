@@ -30,7 +30,7 @@ class LLMClient(ABC):
 class OpenRouterClient(LLMClient):
     """OpenRouter API client."""
 
-    def __init__(self, api_key: str, default_model: str = "anthropic/claude-sonnet-4"):
+    def __init__(self, api_key: str, default_model: str = "anthropic/claude-haiku"):
         self.api_key = api_key
         self.default_model = default_model
         self.base_url = "https://openrouter.ai/api/v1"
@@ -258,8 +258,9 @@ def get_llm_client() -> LLMClient:
             if not openrouter_key:
                 raise ValueError("No LLM configured. Set AWS credentials or OPENROUTER_API_KEY")
 
-            logger.info("Using OpenRouter")
-            default_model = os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4")
+            # Use Haiku by default for speed, can override with OPENROUTER_MODEL
+            default_model = os.getenv("OPENROUTER_MODEL", "anthropic/claude-haiku")
+            logger.info(f"Using OpenRouter with model: {default_model}")
             _llm_client = OpenRouterClient(
                 api_key=openrouter_key,
                 default_model=default_model,

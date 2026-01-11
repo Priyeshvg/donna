@@ -126,7 +126,21 @@ class DonnaRuntime:
                     })
 
             elif finish_reason == "stop":
-                # Agent finished
+                # Agent finished - check if it returned text without calling send_whatsapp
+                text_content = assistant_message.get("content", "")
+                if text_content and not responses:
+                    # Model responded with text directly - treat as WhatsApp message
+                    logger.info("Model returned text directly, treating as WhatsApp message")
+                    responses.append({
+                        "type": "text",
+                        "message": text_content
+                    })
+                    # Also save to chat history
+                    await self.db.save_chat(Chat(
+                        phone_no=self.phone,
+                        chat=text_content,
+                        type="sent"
+                    ))
                 logger.info(f"Agent finished after {iteration + 1} iterations")
                 break
 

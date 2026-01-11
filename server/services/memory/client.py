@@ -19,15 +19,36 @@ class MemoryClient:
         self,
         api_key: str,
         index_name: str,
-        environment: str = "us-east-1",
+        host: Optional[str] = None,
     ):
         self.api_key = api_key
         self.index_name = index_name
-        self.environment = environment
-        # Pinecone serverless endpoint format
-        self.base_url = f"https://{index_name}-{environment}.svc.pinecone.io"
+        # Pinecone serverless uses host from index describe or env var
+        self.base_url = host or os.getenv("PINECONE_HOST", "")
         self._client = httpx.AsyncClient(timeout=30.0)
         self._embedding_client = httpx.AsyncClient(timeout=60.0)
+        self._host_resolved = bool(self.base_url)
+
+    async def _ensure_host(self) -> bool:
+        """Resolve Pinecone host if not already set."""
+        if self._host_resolved:
+            return True
+
+        try:
+            # Get index host from Pinecone API
+            response = await self._client.get(
+                f"https://api.pinecone.io/indexes/{self.index_name}",
+                headers={"Api-Key": self.api_key},
+            )
+            response.raise_for_status()
+            data = response.json()
+            self.base_url = f"https://{data['host']}"
+            self._host_resolved = True
+            logger.info(f"Resolved Pinecone host: {self.base_url}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to resolve Pinecone host: {e}")
+            return False
 
     async def _get_embedding(self, text: str) -> List[float]:
         """Get embedding from OpenRouter (uses OpenAI-compatible endpoint)."""
@@ -68,6 +89,10 @@ class MemoryClient:
             Vector ID
         """
         try:
+            # Ensure host is resolved
+            if not await self._ensure_host():
+                raise ValueError("Could not resolve Pinecone host")
+
             # Generate embedding
             embedding = await self._get_embedding(content)
 
@@ -122,6 +147,10 @@ class MemoryClient:
             List of matching memories with scores
         """
         try:
+            # Ensure host is resolved
+            if not await self._ensure_host():
+                return []
+
             # Generate query embedding
             embedding = await self._get_embedding(query)
 
@@ -168,6 +197,10 @@ class MemoryClient:
             Success status
         """
         try:
+            # Ensure host is resolved
+            if not await self._ensure_host():
+                return False
+
             response = await self._client.post(
                 f"{self.base_url}/vectors/delete",
                 json={

@@ -1,0 +1,196 @@
+{
+  "name": "Donna - Send to WhatsApp",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-send",
+        "options": {
+          "responseMode": "responseNode"
+        }
+      },
+      "id": "webhook-send",
+      "name": "Send Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [400, 300],
+      "webhookId": "donna-send"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse incoming request from Donna server\nconst data = $input.first().json;\nconst body = data.body || data;\n\nreturn {\n  phone: body.phone,\n  type: body.type || 'text',\n  message: body.message || '',\n  image_url: body.image_url || '',\n  caption: body.caption || ''\n};"
+      },
+      "id": "parse-request",
+      "name": "Parse Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "is-text",
+              "leftValue": "={{ $json.type }}",
+              "rightValue": "text",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-type",
+      "name": "Is Text?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [800, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v21.0/806507515890557/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', to: $json.phone, type: 'text', text: { body: $json.message } }) }}",
+        "options": {}
+      },
+      "id": "send-text",
+      "name": "Send Text Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "6892pGfmHFKj9aGG",
+          "name": "WhatsApp Access Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v21.0/806507515890557/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', to: $json.phone, type: 'image', image: { link: $json.image_url, caption: $json.caption || '' } }) }}",
+        "options": {}
+      },
+      "id": "send-image",
+      "name": "Send Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "6892pGfmHFKj9aGG",
+          "name": "WhatsApp Access Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, message_id: $json.messages?.[0]?.id || 'sent' }) }}",
+        "options": {}
+      },
+      "id": "response-text",
+      "name": "Response (Text)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1200, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, message_id: $json.messages?.[0]?.id || 'sent' }) }}",
+        "options": {}
+      },
+      "id": "response-image",
+      "name": "Response (Image)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1200, 400]
+    }
+  ],
+  "connections": {
+    "Send Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Request": {
+      "main": [
+        [
+          {
+            "node": "Is Text?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Text?": {
+      "main": [
+        [
+          {
+            "node": "Send Text Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Text Message": {
+      "main": [
+        [
+          {
+            "node": "Response (Text)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Image": {
+      "main": [
+        [
+          {
+            "node": "Response (Image)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

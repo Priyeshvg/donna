@@ -11,6 +11,7 @@ from .config import get_settings
 from .logging_config import configure_logging, logger
 from .routes import api_router
 from .services import get_important_email_watcher, get_trigger_scheduler
+from .services.scheduler import start_scheduler as start_reminder_scheduler
 
 
 # Register global exception handlers for consistent error responses across the API
@@ -66,10 +67,14 @@ app.include_router(api_router)
 
 
 @app.on_event("startup")
-# Initialize background services (trigger scheduler and email watcher) when the app starts
+# Initialize background services (trigger scheduler, reminder scheduler, email watcher) when the app starts
 async def _start_trigger_scheduler() -> None:
     scheduler = get_trigger_scheduler()
     await scheduler.start()
+
+    # Start reminder scheduler (polls Nhost schedule table)
+    await start_reminder_scheduler()
+
     watcher = get_important_email_watcher()
     await watcher.start()
 

@@ -85,6 +85,9 @@ class DatabaseClient(ABC):
 class NhostClient(DatabaseClient):
     """Nhost GraphQL client for production."""
 
+    MAX_RETRIES = 2
+    RETRY_DELAY = 0.5  # seconds
+
     def __init__(self, endpoint: str, admin_secret: str):
         self.endpoint = endpoint
         self.headers = {
@@ -94,28 +97,42 @@ class NhostClient(DatabaseClient):
         self._client = httpx.AsyncClient(timeout=30.0)
 
     async def _execute(self, query: str, variables: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Execute a GraphQL query."""
+        """Execute a GraphQL query with retry logic."""
+        import asyncio
+
         payload = {"query": query}
         if variables:
             payload["variables"] = variables
 
-        try:
-            response = await self._client.post(
-                self.endpoint,
-                json=payload,
-                headers=self.headers,
-            )
-            response.raise_for_status()
-            result = response.json()
+        last_error = None
+        for attempt in range(self.MAX_RETRIES + 1):
+            try:
+                response = await self._client.post(
+                    self.endpoint,
+                    json=payload,
+                    headers=self.headers,
+                )
+                response.raise_for_status()
+                result = response.json()
 
-            if "errors" in result:
-                logger.error(f"GraphQL errors: {result['errors']}")
-                raise Exception(f"GraphQL error: {result['errors']}")
+                if "errors" in result:
+                    logger.error(f"GraphQL errors: {result['errors']}")
+                    raise Exception(f"GraphQL error: {result['errors']}")
 
-            return result.get("data", {})
-        except Exception as e:
-            logger.error(f"Nhost query failed: {e}")
-            raise
+                return result.get("data", {})
+            except (httpx.TimeoutException, httpx.HTTPStatusError) as e:
+                last_error = e
+                if attempt < self.MAX_RETRIES:
+                    logger.warning(f"Nhost query failed (attempt {attempt + 1}), retrying: {e}")
+                    await asyncio.sleep(self.RETRY_DELAY * (attempt + 1))
+                else:
+                    logger.error(f"Nhost query failed after {self.MAX_RETRIES + 1} attempts: {e}")
+                    raise
+            except Exception as e:
+                logger.error(f"Nhost query failed: {e}")
+                raise
+
+        raise last_error
 
     # User operations
     async def get_user(self, phone: str) -> Optional[User]:
@@ -123,8 +140,7 @@ class NhostClient(DatabaseClient):
         query GetUser($phone: String!) {
             user_phone_no(where: {phone_no: {_eq: $phone}}) {
                 id phone_no name email user_context default_reminder_method
-                timezone daily_checkin_enabled daily_checkin_time pin_status
-                onboarding created_at updated_at
+                timezone onboarding created_at updated_at
             }
         }
         """
@@ -139,8 +155,7 @@ class NhostClient(DatabaseClient):
         mutation CreateUser($object: user_phone_no_insert_input!) {
             insert_user_phone_no_one(object: $object) {
                 id phone_no name email user_context default_reminder_method
-                timezone daily_checkin_enabled daily_checkin_time pin_status
-                onboarding created_at updated_at
+                timezone onboarding created_at updated_at
             }
         }
         """
@@ -169,8 +184,7 @@ class NhostClient(DatabaseClient):
             ) {{
                 returning {{
                     id phone_no name email user_context default_reminder_method
-                    timezone daily_checkin_enabled daily_checkin_time pin_status
-                    onboarding created_at updated_at
+                    timezone onboarding created_at updated_at
                 }}
             }}
         }}
@@ -345,6 +359,104 @@ class NhostClient(DatabaseClient):
         """
         data = await self._execute(query, {"phone": phone})
         return data.get("delete_chats", {}).get("affected_rows", 0)
+
+    # Entity operations (people, places, things)
+    async def upsert_entity(
+        self, phone: str, entity_type: str, name: str, attributes: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Create or update an entity."""
+        query = """
+        mutation UpsertEntity($object: entities_insert_input!, $update_cols: [entities_update_column!]!) {
+            insert_entities_one(
+                object: $object,
+                on_conflict: {
+                    constraint: entities_user_phone_type_name_key,
+                    update_columns: $update_cols
+                }
+            ) {
+                id user_phone type name attributes last_mentioned mention_count created_at
+            }
+        }
+        """
+        obj = {
+            "user_phone": phone,
+            "type": entity_type,
+            "name": name,
+            "attributes": attributes,
+            "last_mentioned": datetime.utcnow().isoformat(),
+        }
+        try:
+            data = await self._execute(query, {
+                "object": obj,
+                "update_cols": ["attributes", "last_mentioned", "mention_count"]
+            })
+            return data.get("insert_entities_one", {})
+        except Exception as e:
+            logger.error(f"Failed to upsert entity: {e}")
+            return {}
+
+    async def get_entities(
+        self, phone: str, entity_type: Optional[str] = None, name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Get entities for a user."""
+        where_parts = ["user_phone: {_eq: $phone}"]
+        variables = {"phone": phone}
+
+        if entity_type:
+            where_parts.append("type: {_eq: $type}")
+            variables["type"] = entity_type
+
+        if name:
+            where_parts.append("name: {_ilike: $name}")
+            variables["name"] = f"%{name}%"
+
+        where_clause = "{" + ", ".join(where_parts) + "}"
+
+        query = f"""
+        query GetEntities($phone: String!, $type: String, $name: String) {{
+            entities(
+                where: {where_clause},
+                order_by: {{last_mentioned: desc}},
+                limit: 20
+            ) {{
+                id user_phone type name attributes last_mentioned mention_count created_at
+            }}
+        }}
+        """
+        try:
+            data = await self._execute(query, variables)
+            return data.get("entities", [])
+        except Exception as e:
+            logger.error(f"Failed to get entities: {e}")
+            return []
+
+    # Memory operations
+    async def save_memory(
+        self, phone: str, category: str, content: str,
+        pinecone_id: Optional[str] = None, importance: float = 0.5
+    ) -> Dict[str, Any]:
+        """Save a memory record."""
+        query = """
+        mutation SaveMemory($object: memories_insert_input!) {
+            insert_memories_one(object: $object) {
+                id user_phone pinecone_id category content importance created_at
+            }
+        }
+        """
+        obj = {
+            "user_phone": phone,
+            "category": category,
+            "content": content,
+            "pinecone_id": pinecone_id,
+            "importance": importance,
+            "source_type": "conversation",
+        }
+        try:
+            data = await self._execute(query, {"object": obj})
+            return data.get("insert_memories_one", {})
+        except Exception as e:
+            logger.error(f"Failed to save memory: {e}")
+            return {}
 
     def _gql_type(self, value: Any) -> str:
         """Infer GraphQL type from Python value."""

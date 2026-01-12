@@ -1,0 +1,123 @@
+{
+  "name": "Donna - Receive from WhatsApp",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-receive",
+        "options": {}
+      },
+      "id": "webhook-receive",
+      "name": "WhatsApp Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [400, 300],
+      "webhookId": "donna-receive"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "check-message",
+              "leftValue": "={{ $json.body.entry[0].changes[0].value.messages[0].text.body }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "filter-message",
+      "name": "Has Message?",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [600, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract message data from WhatsApp webhook\nconst data = $input.first().json;\nconst entry = data.body?.entry?.[0] || data.entry?.[0];\nconst changes = entry.changes[0];\nconst value = changes.value;\nconst message = value.messages[0];\nconst contact = value.contacts[0];\n\nreturn {\n  phone: message.from,\n  message: message.text?.body || '',\n  profile_name: contact.profile?.name || '',\n  message_id: message.id,\n  timestamp: message.timestamp\n};"
+      },
+      "id": "extract-message",
+      "name": "Extract Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://13.127.55.121/api/v1/whatsapp/webhook",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phone: $json.phone, message: $json.message, profile_name: $json.profile_name }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "call-donna",
+      "name": "Call Donna AI (Async)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 300]
+    }
+  ],
+  "connections": {
+    "WhatsApp Webhook": {
+      "main": [
+        [
+          {
+            "node": "Has Message?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Message?": {
+      "main": [
+        [
+          {
+            "node": "Extract Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Message": {
+      "main": [
+        [
+          {
+            "node": "Call Donna AI (Async)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

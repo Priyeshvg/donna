@@ -15,6 +15,9 @@ from ...logging_config import logger
 class MemoryClient:
     """Client for Pinecone vector memory operations."""
 
+    MAX_RETRIES = 2
+    RETRY_DELAY = 0.5  # seconds
+
     def __init__(
         self,
         api_key: str,
@@ -51,28 +54,108 @@ class MemoryClient:
             return False
 
     async def _get_embedding(self, text: str) -> List[float]:
-        """Get embedding from OpenRouter (uses OpenAI-compatible endpoint)."""
+        """Get embedding from OpenRouter with retry logic."""
+        import asyncio
+
         openrouter_key = os.getenv("OPENROUTER_API_KEY")
         if not openrouter_key:
             raise ValueError("OPENROUTER_API_KEY required for embeddings")
 
-        # Use OpenRouter's embedding endpoint
-        # IMPORTANT: Pinecone index is 1024 dimensions, so we must specify dimensions=1024
-        response = await self._embedding_client.post(
-            "https://openrouter.ai/api/v1/embeddings",
-            json={
-                "model": "openai/text-embedding-3-small",
-                "input": text,
-                "dimensions": 1024,  # Match Pinecone index dimension
-            },
-            headers={
-                "Authorization": f"Bearer {openrouter_key}",
-                "Content-Type": "application/json",
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["data"][0]["embedding"]
+        last_error = None
+        for attempt in range(self.MAX_RETRIES + 1):
+            try:
+                response = await self._embedding_client.post(
+                    "https://openrouter.ai/api/v1/embeddings",
+                    json={
+                        "model": "openai/text-embedding-3-small",
+                        "input": text,
+                        "dimensions": 1024,  # Match Pinecone index dimension
+                    },
+                    headers={
+                        "Authorization": f"Bearer {openrouter_key}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+                return data["data"][0]["embedding"]
+            except (httpx.TimeoutException, httpx.HTTPStatusError) as e:
+                last_error = e
+                if attempt < self.MAX_RETRIES:
+                    logger.warning(f"Embedding call failed (attempt {attempt + 1}), retrying: {e}")
+                    await asyncio.sleep(self.RETRY_DELAY * (attempt + 1))
+                else:
+                    logger.error(f"Embedding call failed after {self.MAX_RETRIES + 1} attempts: {e}")
+                    raise
+
+        raise last_error
+
+    # Standard memory categories
+    CATEGORIES = {
+        "contact": ["number", "phone", "email", "address", "mobile"],
+        "event": ["birthday", "anniversary", "meeting", "appointment"],
+        "preference": ["prefers", "likes", "dislikes", "wants", "favorite"],
+        "relationship": ["is my", "are my", "wife", "husband", "friend", "colleague", "boss"],
+        "fact": [],  # Default category
+    }
+
+    def _detect_category(self, content: str) -> str:
+        """Detect the memory category from content."""
+        content_lower = content.lower()
+
+        for category, keywords in self.CATEGORIES.items():
+            for keyword in keywords:
+                if keyword in content_lower:
+                    return category
+
+        return "fact"
+
+    def _extract_entity(self, content: str) -> Optional[str]:
+        """Extract the main entity (person/thing) from content."""
+        import re
+
+        content_lower = content.lower()
+
+        # Pattern: "X's number/phone/birthday/email is Y"
+        patterns = [
+            r"(\w+)'s\s+(number|phone|birthday|email|address)",
+            r"(\w+)\s+(number|phone|birthday|email)\s+is",
+            r"(my\s+\w+)'s",  # "my mom's birthday"
+            r"^(\w+)\s+is\s+",  # "Akash is my friend"
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, content_lower)
+            if match:
+                return match.group(1).strip()
+
+        return None
+
+    def _generate_semantic_id(self, phone: str, content: str, metadata: Optional[Dict[str, Any]]) -> str:
+        """Generate a deterministic ID for semantic deduplication.
+
+        For content about the same entity (e.g., "Akash's phone"), we want
+        the same ID so updates overwrite instead of duplicating.
+        """
+        import hashlib
+
+        meta = metadata or {}
+
+        # Use metadata entity if provided, otherwise extract from content
+        entity = meta.get("person") or meta.get("entity") or self._extract_entity(content)
+
+        # Use metadata category if provided, otherwise detect from content
+        category = meta.get("category") or self._detect_category(content)
+
+        # If we found an entity, create deterministic ID
+        if entity:
+            entity = entity.lower()
+            # Create a hash from phone + entity + category
+            key = f"{phone}:{entity}:{category}"
+            return hashlib.md5(key.encode()).hexdigest()
+
+        # Fallback to random UUID for generic memories
+        return str(uuid.uuid4())
 
     async def store(
         self,
@@ -81,6 +164,10 @@ class MemoryClient:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Store content in vector memory for a user.
+
+        Uses smart deduplication: if content is about the same entity
+        (e.g., "Akash's number"), it updates the existing vector instead
+        of creating a duplicate.
 
         Args:
             phone: User's phone number (used as namespace)
@@ -98,15 +185,24 @@ class MemoryClient:
             # Generate embedding
             embedding = await self._get_embedding(content)
 
-            # Create vector ID
-            vector_id = str(uuid.uuid4())
+            # Generate semantic ID (deterministic for same entity)
+            vector_id = self._generate_semantic_id(phone, content, metadata)
 
-            # Prepare metadata
+            # Prepare metadata with auto-detected category and entity
             meta = metadata or {}
             meta["phone"] = phone
             meta["content"] = content[:1000]  # Store truncated content in metadata
+            meta["updated_at"] = __import__('datetime').datetime.now().isoformat()
 
-            # Upsert to Pinecone
+            # Auto-detect and add category/entity if not provided
+            if "category" not in meta:
+                meta["category"] = self._detect_category(content)
+            if "entity" not in meta:
+                entity = self._extract_entity(content)
+                if entity:
+                    meta["entity"] = entity
+
+            # Upsert to Pinecone (will update if ID exists)
             response = await self._client.post(
                 f"{self.base_url}/vectors/upsert",
                 json={
@@ -125,7 +221,7 @@ class MemoryClient:
                 },
             )
             response.raise_for_status()
-            logger.info(f"Stored memory for {phone}: {content[:50]}...")
+            logger.info(f"Stored/updated memory for {phone} (id={vector_id[:8]}...): {content[:50]}...")
             return vector_id
 
         except Exception as e:

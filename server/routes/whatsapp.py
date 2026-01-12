@@ -6,14 +6,17 @@ and processes them through Donna.
 
 from __future__ import annotations
 
-import asyncio
+import os
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 
-from ..agents.donna import DonnaRuntime
+from ..agents.donna import DonnaRuntime, DonnaRuntimeV2
 from ..logging_config import logger
+
+# Use V2 (OpenPoke-style) architecture if enabled
+USE_V2 = os.getenv("DONNA_USE_V2", "1") == "1"
 
 
 router = APIRouter(prefix="/whatsapp", tags=["whatsapp"])
@@ -41,7 +44,10 @@ class MessageResponse(BaseModel):
 async def process_message_async(phone: str, message: str, profile_name: Optional[str]):
     """Process message asynchronously."""
     try:
-        runtime = DonnaRuntime(phone)
+        if USE_V2:
+            runtime = DonnaRuntimeV2(phone)
+        else:
+            runtime = DonnaRuntime(phone)
         result = await runtime.execute(message, profile_name)
         logger.info(f"Message processed for {phone}: {result}")
     except Exception as e:
@@ -86,7 +92,10 @@ async def receive_message_sync(request: IncomingMessageRequest):
         raise HTTPException(status_code=400, detail="Missing phone or message")
 
     try:
-        runtime = DonnaRuntime(request.phone)
+        if USE_V2:
+            runtime = DonnaRuntimeV2(request.phone)
+        else:
+            runtime = DonnaRuntime(request.phone)
         result = await runtime.execute(request.message, request.profile_name)
         return {
             "ok": True,

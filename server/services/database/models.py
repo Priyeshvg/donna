@@ -17,14 +17,11 @@ class User(BaseModel):
     user_context: Optional[str] = None
     default_reminder_method: str = "whatsapp"
     timezone: str = "Asia/Kolkata"
-    daily_checkin_enabled: bool = False
-    daily_checkin_time: Optional[str] = None
-    pin_status: Optional[str] = None
+    # Onboarding tracks usage counts - no intro logic, just feature usage
     onboarding: Optional[Dict[str, Any]] = Field(default_factory=lambda: {
-        "step": 0,
-        "intro_shown": False,
-        "first_reminder": False,
-        "preference_asked": False
+        "reminder_count": 0,
+        "memory_count": 0,
+        "message_count": 0,
     })
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

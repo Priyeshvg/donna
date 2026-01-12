@@ -78,6 +78,15 @@ class ReminderScheduler:
             message = f"📞 Call reminder: {reminder.context}\n\n(Voice call feature coming soon)"
 
         # Send WhatsApp message
+        if not self.whatsapp:
+            logger.warning(f"WhatsApp not configured - cannot send reminder {reminder.id}")
+            # Mark as sent to avoid retry loop
+            await self.db.update_schedule(reminder.id, {
+                "reminder_sent": True,
+                "call_status": "completed"
+            })
+            return
+
         success = await self.whatsapp.send_text(reminder.phone_number, message)
 
         if success:

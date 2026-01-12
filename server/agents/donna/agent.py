@@ -206,7 +206,7 @@ def get_tools_schema() -> List[Dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "update_user_profile",
-                "description": "Update user's profile (name, preferences, onboarding state)",
+                "description": "Update user's profile (name, preferences, onboarding state, pin_status)",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -214,6 +214,10 @@ def get_tools_schema() -> List[Dict[str, Any]]:
                         "default_reminder_method": {
                             "type": "string",
                             "enum": ["whatsapp", "call"]
+                        },
+                        "pin_status": {
+                            "type": "string",
+                            "description": "Set to 'shown' after showing pin instruction"
                         },
                         "onboarding": {
                             "type": "object",
@@ -394,7 +398,7 @@ class DonnaAgent:
         return {"success": True, "image_url": image_url, "caption": caption, "pending_send": True}
 
     async def _create_reminder(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a reminder."""
+        """Create a reminder and increment usage count."""
         schedule = Schedule(
             phone_number=self.phone,
             context=args["context"],
@@ -405,6 +409,10 @@ class DonnaAgent:
             task_status="pending"
         )
         created = await self.db.create_schedule(schedule)
+
+        # Increment reminder count
+        await self._increment_usage_stat("reminder_count")
+
         return {
             "success": True,
             "reminder_id": created.id,
@@ -453,11 +461,15 @@ class DonnaAgent:
         return {"success": True, "deleted_count": count}
 
     async def _store_memory(self, content: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
-        """Store in vector memory."""
+        """Store in vector memory and increment usage count."""
         if not self.memory:
             return {"success": False, "error": "Memory not configured"}
 
         vector_id = await self.memory.store(self.phone, content, metadata)
+
+        # Increment memory count
+        await self._increment_usage_stat("memory_count")
+
         return {"success": True, "vector_id": vector_id}
 
     async def _search_memory(self, query: str) -> Dict[str, Any]:
@@ -505,6 +517,25 @@ class DonnaAgent:
         await self.db.delete_user(self.phone)
 
         return {"success": True, "message": "All data deleted"}
+
+    async def _increment_usage_stat(self, stat_name: str) -> None:
+        """Increment a usage stat counter in the onboarding field."""
+        try:
+            if not self.user:
+                return
+
+            # Use onboarding field for usage tracking
+            current_stats = self.user.onboarding or {
+                "reminder_count": 0,
+                "memory_count": 0,
+                "message_count": 0,
+            }
+            current_stats[stat_name] = current_stats.get(stat_name, 0) + 1
+
+            await self.db.update_user(self.phone, {"onboarding": current_stats})
+            logger.debug(f"Incremented {stat_name} for {self.phone}")
+        except Exception as e:
+            logger.warning(f"Failed to increment usage stat: {e}")
 
     # Calendar methods
     async def _list_calendar_events(self, days: int) -> Dict[str, Any]:

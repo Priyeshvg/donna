@@ -161,15 +161,14 @@ class DonnaRuntime:
         user = await self.db.get_user(self.phone)
 
         if not user:
-            # Create new user
+            # Create new user - onboarding tracks usage counts
             user = User(
                 phone_no=self.phone,
                 name=profile_name,
                 onboarding={
-                    "step": 0,
-                    "intro_shown": False,
-                    "first_reminder": False,
-                    "preference_asked": False
+                    "reminder_count": 0,
+                    "memory_count": 0,
+                    "message_count": 0,
                 }
             )
             user = await self.db.create_user(user)
@@ -180,9 +179,12 @@ class DonnaRuntime:
     def _should_search_memory(self, message: str) -> bool:
         """Determine if we should search memory for this message.
 
-        Skip memory search for simple greetings and short messages
-        to reduce latency on trivial interactions.
+        Skip memory search for:
+        - Simple greetings
+        - Messages that are STORING new information (not retrieving)
         """
+        msg_lower = message.lower().strip()
+
         # Simple greetings that don't need memory
         simple_patterns = {
             "hi", "hello", "hey", "yo", "sup", "hola", "namaste",
@@ -191,8 +193,6 @@ class DonnaRuntime:
             "yes", "no", "yep", "nope", "sure", "cool", "nice", "great",
         }
 
-        msg_lower = message.lower().strip()
-
         # Skip for very short messages (likely greetings)
         if len(msg_lower) < 4:
             return False
@@ -200,6 +200,20 @@ class DonnaRuntime:
         # Skip for known greetings
         if msg_lower in simple_patterns:
             return False
+
+        # IMPORTANT: Skip memory search when user is STORING new info
+        # Patterns that indicate storage intent (not retrieval)
+        store_patterns = [
+            "'s number is", "'s phone is", "'s birthday is",
+            " number is ", " phone is ", " birthday is ",
+            "remember that", "remember this", "save this",
+            "my name is", "call me ", "i am ",
+            " is my ", " are my ",  # "Sarah is my wife"
+        ]
+        for pattern in store_patterns:
+            if pattern in msg_lower:
+                logger.info(f"Skipping memory search - storage intent detected: {message[:30]}...")
+                return False
 
         # Skip if message starts with common greeting
         for pattern in simple_patterns:
@@ -251,14 +265,6 @@ class DonnaRuntime:
 
         # Use stored name from DB, not WhatsApp profile name
         user_name = self.user.name if self.user.name else None
-        onboarding = self.user.onboarding or {}
-
-        onboarding_info = (
-            f"step={onboarding.get('step', 0)}, "
-            f"intro_shown={onboarding.get('intro_shown', False)}, "
-            f"first_reminder={onboarding.get('first_reminder', False)}, "
-            f"preference_asked={onboarding.get('preference_asked', False)}"
-        )
 
         # Build memories section
         memories_section = ""
@@ -295,7 +301,6 @@ CURRENT CONTEXT
 {user_section}
 Time: {ist_time}
 Default reminder method: {self.user.default_reminder_method}
-Onboarding: {onboarding_info}
 
 Today: {iso_date}
 Tomorrow: {tomorrow}
@@ -304,15 +309,9 @@ Time format: YYYY-MM-DDTHH:mm:ss+05:30
 User's message: "{message}"
 {memories_section}
 ═══════════════════════════════════════════════════════════
-SPECIAL HANDLING
+SPECIAL COMMANDS
 ═══════════════════════════════════════════════════════════
-- If message is "!reset": Ask for confirmation first
-- If message is "confirm reset": Execute reset_user tool
-- If new user (step 0): Run onboarding intro
-- If step 1 and creating first reminder: Send pin image after
-
-Pin image URL: https://res.cloudinary.com/dfohiowls/image/upload/v1766178540/IMG_9942_2_opa5ji.jpg
-Pin caption: "Quick tip: Pin me to the top so I'm always here when you need me 📌"
+- "!reset": Ask for confirmation first, then execute reset_user tool after user confirms
 """
         return context
 

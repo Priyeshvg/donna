@@ -12,6 +12,7 @@ from .logging_config import configure_logging, logger
 from .routes import api_router
 from .services import get_important_email_watcher, get_trigger_scheduler
 from .services.scheduler import start_scheduler as start_reminder_scheduler
+from .services.scheduler import start_task_scheduler, stop_task_scheduler
 
 
 # Register global exception handlers for consistent error responses across the API
@@ -72,8 +73,11 @@ async def _start_trigger_scheduler() -> None:
     scheduler = get_trigger_scheduler()
     await scheduler.start()
 
-    # Start reminder scheduler (polls Nhost schedule table)
+    # Start reminder scheduler (polls Nhost schedule table - legacy)
     await start_reminder_scheduler()
+
+    # Start task scheduler (polls new tasks/recurring_tasks tables)
+    await start_task_scheduler()
 
     watcher = get_important_email_watcher()
     await watcher.start()
@@ -84,6 +88,7 @@ async def _start_trigger_scheduler() -> None:
 async def _stop_trigger_scheduler() -> None:
     scheduler = get_trigger_scheduler()
     await scheduler.stop()
+    await stop_task_scheduler()
     watcher = get_important_email_watcher()
     await watcher.stop()
 

@@ -395,8 +395,8 @@ class NhostClient(DatabaseClient):
             }
         }
         """
-        # Map chat type to direction
-        direction = "incoming" if chat.type == "user" else "outgoing"
+        # Map chat type to direction (code uses "received"/"sent")
+        direction = "incoming" if chat.type == "received" else "outgoing"
         obj = {
             "user_phone": chat.phone_no,
             "message": chat.chat,

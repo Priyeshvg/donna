@@ -1,12 +1,67 @@
 """Donna Execution Agents - handle reminders, memory, calendar, etc."""
 
-from datetime import datetime
-from typing import Any, Dict
+from datetime import datetime, timedelta
+import re
+from typing import Any, Dict, Optional
 
 from ....logging_config import logger
 from ....services.database import get_database_client, Schedule, User
 from ....services.memory import get_memory_client
 from ....services.calendar import get_calendar_client
+
+
+def _parse_time(time_str: str) -> Optional[datetime]:
+    """Parse various time formats into datetime.
+
+    Supports:
+    - ISO format: 2024-01-14T21:00:00
+    - Time only: 9pm, 9:00pm, 21:00, 9:30 pm
+    - Relative: in 2 mins, in 5 minutes, in 1 hour
+    """
+    if not time_str:
+        return None
+
+    time_str = time_str.strip().lower()
+    now = datetime.now()
+
+    # Try ISO format first
+    try:
+        return datetime.fromisoformat(time_str)
+    except ValueError:
+        pass
+
+    # Try relative time (in X mins/minutes/hours)
+    relative_match = re.match(r'in\s+(\d+)\s*(min|mins|minutes?|hour|hours?|hr|hrs?)', time_str)
+    if relative_match:
+        amount = int(relative_match.group(1))
+        unit = relative_match.group(2)
+        if 'hour' in unit or 'hr' in unit:
+            return now + timedelta(hours=amount)
+        else:
+            return now + timedelta(minutes=amount)
+
+    # Try time only formats (9pm, 9:00pm, 21:00, etc.)
+    time_match = re.match(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)?', time_str)
+    if time_match:
+        hour = int(time_match.group(1))
+        minute = int(time_match.group(2) or 0)
+        period = time_match.group(3)
+
+        # Convert to 24-hour format
+        if period == 'pm' and hour != 12:
+            hour += 12
+        elif period == 'am' and hour == 12:
+            hour = 0
+
+        result = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+        # If time has passed today, schedule for tomorrow
+        if result <= now:
+            result += timedelta(days=1)
+
+        return result
+
+    return None
 
 
 async def execute_agent_task(
@@ -63,10 +118,9 @@ async def _handle_reminder(
         if not call_time_str:
             return {"success": False, "error": "Missing time parameter"}
 
-        try:
-            call_time = datetime.fromisoformat(call_time_str)
-        except ValueError:
-            return {"success": False, "error": "Invalid time format"}
+        call_time = _parse_time(call_time_str)
+        if not call_time:
+            return {"success": False, "error": f"Could not parse time: {call_time_str}"}
 
         schedule = Schedule(
             phone_number=phone,

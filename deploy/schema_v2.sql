@@ -3,16 +3,16 @@
 -- This schema supports tasks, recurring tasks, accountability, and insights
 
 -- ============================================
--- USERS TABLE (enhanced)
+-- DONNA_USERS TABLE (named to avoid Nhost auth.users conflict)
 -- ============================================
-CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE IF NOT EXISTS donna_users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     phone VARCHAR(20) UNIQUE NOT NULL,
     name VARCHAR(255),
     timezone VARCHAR(50) DEFAULT 'Asia/Kolkata',
     preferences JSONB DEFAULT '{
         "morning_brief_time": "08:00",
-        "evening_checkin_time": "18:00",
+        "evening_checkin_time": "21:00",
         "quiet_hours_start": "23:00",
         "quiet_hours_end": "07:00"
     }',
@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
+CREATE INDEX IF NOT EXISTS idx_donna_users_phone ON donna_users(phone);
 
 -- ============================================
 -- TASKS TABLE (one-time tasks)

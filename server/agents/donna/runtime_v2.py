@@ -158,13 +158,8 @@ class DonnaRuntimeV2:
 
         if not user:
             user = User(
-                phone_no=self.phone,
+                phone=self.phone,
                 name=profile_name,
-                onboarding={
-                    "reminder_count": 0,
-                    "memory_count": 0,
-                    "message_count": 0,
-                }
             )
             user = await self.db.create_user(user)
             logger.info(f"Created new user: {self.phone}")

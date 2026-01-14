@@ -134,231 +134,320 @@ class NhostClient(DatabaseClient):
 
         raise last_error
 
-    # User operations
+    # User operations - using donna_users table (v2)
     async def get_user(self, phone: str) -> Optional[User]:
         query = """
         query GetUser($phone: String!) {
-            user_phone_no(where: {phone_no: {_eq: $phone}}) {
-                id phone_no name email user_context default_reminder_method
-                timezone onboarding created_at updated_at
+            donna_users(where: {phone: {_eq: $phone}}) {
+                id phone name timezone preferences created_at updated_at
             }
         }
         """
         data = await self._execute(query, {"phone": phone})
-        users = data.get("user_phone_no", [])
+        users = data.get("donna_users", [])
         if users:
-            return User(**users[0])
+            u = users[0]
+            # Map v2 fields to User model
+            return User(
+                id=u.get("id"),
+                phone_no=u.get("phone"),
+                name=u.get("name"),
+                timezone=u.get("timezone"),
+                created_at=u.get("created_at"),
+                updated_at=u.get("updated_at"),
+            )
         return None
 
     async def create_user(self, user: User) -> User:
         query = """
-        mutation CreateUser($object: user_phone_no_insert_input!) {
-            insert_user_phone_no_one(object: $object) {
-                id phone_no name email user_context default_reminder_method
-                timezone onboarding created_at updated_at
+        mutation CreateUser($object: donna_users_insert_input!) {
+            insert_donna_users_one(object: $object) {
+                id phone name timezone preferences created_at updated_at
             }
         }
         """
         obj = {
-            "phone_no": user.phone_no,
+            "phone": user.phone_no,
             "name": user.name,
-            "email": user.email,
-            "user_context": user.user_context,
-            "default_reminder_method": user.default_reminder_method,
-            "timezone": user.timezone,
-            "onboarding": user.onboarding,
+            "timezone": user.timezone or "Asia/Kolkata",
         }
         data = await self._execute(query, {"object": obj})
-        return User(**data["insert_user_phone_no_one"])
+        u = data["insert_donna_users_one"]
+        return User(
+            id=u.get("id"),
+            phone_no=u.get("phone"),
+            name=u.get("name"),
+            timezone=u.get("timezone"),
+            created_at=u.get("created_at"),
+            updated_at=u.get("updated_at"),
+        )
 
     async def update_user(self, phone: str, updates: Dict[str, Any]) -> Optional[User]:
+        # Map old field names to new v2 field names
+        field_map = {"phone_no": "phone"}
+        mapped_updates = {field_map.get(k, k): v for k, v in updates.items()}
+
         # Build dynamic set clause
-        set_fields = ", ".join(f"{k}: ${k}" for k in updates.keys())
-        var_defs = ", ".join(f"${k}: {self._gql_type(v)}" for k, v in updates.items())
+        set_fields = ", ".join(f"{k}: ${k}" for k in mapped_updates.keys())
+        var_defs = ", ".join(f"${k}: {self._gql_type(v)}" for k, v in mapped_updates.items())
 
         query = f"""
         mutation UpdateUser($phone: String!, {var_defs}) {{
-            update_user_phone_no(
-                where: {{phone_no: {{_eq: $phone}}}},
+            update_donna_users(
+                where: {{phone: {{_eq: $phone}}}},
                 _set: {{{set_fields}}}
             ) {{
                 returning {{
-                    id phone_no name email user_context default_reminder_method
-                    timezone onboarding created_at updated_at
+                    id phone name timezone preferences created_at updated_at
                 }}
             }}
         }}
         """
-        variables = {"phone": phone, **updates}
+        variables = {"phone": phone, **mapped_updates}
         data = await self._execute(query, variables)
-        returning = data.get("update_user_phone_no", {}).get("returning", [])
+        returning = data.get("update_donna_users", {}).get("returning", [])
         if returning:
-            return User(**returning[0])
+            u = returning[0]
+            return User(
+                id=u.get("id"),
+                phone_no=u.get("phone"),
+                name=u.get("name"),
+                timezone=u.get("timezone"),
+                created_at=u.get("created_at"),
+                updated_at=u.get("updated_at"),
+            )
         return None
 
     async def delete_user(self, phone: str) -> bool:
         query = """
         mutation DeleteUser($phone: String!) {
-            delete_user_phone_no(where: {phone_no: {_eq: $phone}}) {
+            delete_donna_users(where: {phone: {_eq: $phone}}) {
                 affected_rows
             }
         }
         """
         data = await self._execute(query, {"phone": phone})
-        return data.get("delete_user_phone_no", {}).get("affected_rows", 0) > 0
+        return data.get("delete_donna_users", {}).get("affected_rows", 0) > 0
 
-    # Schedule operations
+    # Schedule operations - using tasks table (v2)
     async def get_schedules(self, phone: str, status: Optional[str] = None) -> List[Schedule]:
-        where_clause = '{phone_number: {_eq: $phone}}'
-        if status:
-            where_clause = '{phone_number: {_eq: $phone}, call_status: {_eq: $status}}'
+        # Map old status values to new
+        status_map = {"pending": "pending", "completed": "completed", "cancelled": "dropped"}
+        mapped_status = status_map.get(status, status) if status else None
+
+        where_clause = '{user_phone: {_eq: $phone}}'
+        if mapped_status:
+            where_clause = '{user_phone: {_eq: $phone}, status: {_eq: $status}}'
 
         query = f"""
         query GetSchedules($phone: String!, $status: String) {{
-            schedule(
+            tasks(
                 where: {where_clause},
-                order_by: {{call_time: asc}},
+                order_by: {{remind_at: asc}},
                 limit: 50
             ) {{
-                id user_id phone_number call_time context call_status task_status
-                habit_type importance reminder_method rich_context follow_up_time
-                follow_up_count reminder_sent is_recurring recurrence_rule
+                id user_phone title description status priority
+                remind_at due_date completed_at accountability metadata
                 created_at updated_at
             }}
         }}
         """
         variables = {"phone": phone}
-        if status:
-            variables["status"] = status
+        if mapped_status:
+            variables["status"] = mapped_status
         data = await self._execute(query, variables)
-        return [Schedule(**s) for s in data.get("schedule", [])]
+
+        # Map v2 tasks to Schedule model
+        schedules = []
+        for t in data.get("tasks", []):
+            acc = t.get("accountability") or {}
+            schedules.append(Schedule(
+                id=t.get("id"),
+                phone_number=t.get("user_phone"),
+                call_time=t.get("remind_at"),
+                context=t.get("title"),
+                call_status=t.get("status"),
+                reminder_sent=t.get("status") == "reminded",
+                follow_up_count=acc.get("reminder_count", 0),
+                created_at=t.get("created_at"),
+                updated_at=t.get("updated_at"),
+            ))
+        return schedules
 
     async def create_schedule(self, schedule: Schedule) -> Schedule:
         query = """
-        mutation CreateSchedule($object: schedule_insert_input!) {
-            insert_schedule_one(object: $object) {
-                id user_id phone_number call_time context call_status task_status
-                habit_type importance reminder_method rich_context follow_up_time
-                follow_up_count reminder_sent is_recurring recurrence_rule
+        mutation CreateSchedule($object: tasks_insert_input!) {
+            insert_tasks_one(object: $object) {
+                id user_phone title description status priority
+                remind_at due_date completed_at accountability metadata
                 created_at updated_at
             }
         }
         """
         obj = {
-            "user_id": schedule.user_id,
-            "phone_number": schedule.phone_number,
-            "call_time": schedule.call_time.isoformat() if schedule.call_time else None,
-            "context": schedule.context,
-            "call_status": schedule.call_status,
-            "task_status": schedule.task_status,
-            "habit_type": schedule.habit_type,
-            "importance": schedule.importance,
-            "reminder_method": schedule.reminder_method,
-            "rich_context": schedule.rich_context,
-            "follow_up_time": schedule.follow_up_time.isoformat() if schedule.follow_up_time else None,
-            "follow_up_count": schedule.follow_up_count,
-            "reminder_sent": schedule.reminder_sent,
-            "is_recurring": schedule.is_recurring,
-            "recurrence_rule": schedule.recurrence_rule,
+            "user_phone": schedule.phone_number,
+            "title": schedule.context or "Reminder",
+            "status": "pending",
+            "remind_at": schedule.call_time.isoformat() if schedule.call_time else None,
         }
         # Remove None values
         obj = {k: v for k, v in obj.items() if v is not None}
         data = await self._execute(query, {"object": obj})
-        return Schedule(**data["insert_schedule_one"])
+        t = data["insert_tasks_one"]
+        return Schedule(
+            id=t.get("id"),
+            phone_number=t.get("user_phone"),
+            call_time=t.get("remind_at"),
+            context=t.get("title"),
+            call_status=t.get("status"),
+            created_at=t.get("created_at"),
+            updated_at=t.get("updated_at"),
+        )
 
     async def update_schedule(self, schedule_id: str, updates: Dict[str, Any]) -> Optional[Schedule]:
+        # Map old field names to new
+        field_map = {
+            "call_status": "status",
+            "reminder_sent": None,  # Handled differently in v2
+            "call_time": "remind_at",
+            "context": "title",
+        }
+        mapped_updates = {}
+        for k, v in updates.items():
+            new_key = field_map.get(k, k)
+            if new_key:  # Skip fields that don't map
+                mapped_updates[new_key] = v
+
         query = """
-        mutation UpdateSchedule($id: uuid!, $set: schedule_set_input!) {
-            update_schedule_by_pk(pk_columns: {id: $id}, _set: $set) {
-                id user_id phone_number call_time context call_status task_status
-                habit_type importance reminder_method rich_context follow_up_time
-                follow_up_count reminder_sent is_recurring recurrence_rule
+        mutation UpdateSchedule($id: uuid!, $set: tasks_set_input!) {
+            update_tasks_by_pk(pk_columns: {id: $id}, _set: $set) {
+                id user_phone title description status priority
+                remind_at due_date completed_at accountability metadata
                 created_at updated_at
             }
         }
         """
-        data = await self._execute(query, {"id": schedule_id, "set": updates})
-        result = data.get("update_schedule_by_pk")
+        data = await self._execute(query, {"id": schedule_id, "set": mapped_updates})
+        result = data.get("update_tasks_by_pk")
         if result:
-            return Schedule(**result)
+            return Schedule(
+                id=result.get("id"),
+                phone_number=result.get("user_phone"),
+                call_time=result.get("remind_at"),
+                context=result.get("title"),
+                call_status=result.get("status"),
+                created_at=result.get("created_at"),
+                updated_at=result.get("updated_at"),
+            )
         return None
 
     async def delete_schedules(self, phone: str) -> int:
         query = """
         mutation DeleteSchedules($phone: String!) {
-            delete_schedule(where: {phone_number: {_eq: $phone}}) {
+            delete_tasks(where: {user_phone: {_eq: $phone}}) {
                 affected_rows
             }
         }
         """
         data = await self._execute(query, {"phone": phone})
-        return data.get("delete_schedule", {}).get("affected_rows", 0)
+        return data.get("delete_tasks", {}).get("affected_rows", 0)
 
     async def get_due_schedules(self, before: datetime) -> List[Schedule]:
         query = """
         query GetDueSchedules($before: timestamptz!) {
-            schedule(
+            tasks(
                 where: {
-                    call_time: {_lte: $before},
-                    call_status: {_eq: "pending"},
-                    reminder_sent: {_eq: false}
+                    remind_at: {_lte: $before},
+                    status: {_eq: "pending"}
                 },
-                order_by: {call_time: asc}
+                order_by: {remind_at: asc}
             ) {
-                id user_id phone_number call_time context call_status task_status
-                habit_type importance reminder_method rich_context follow_up_time
-                follow_up_count reminder_sent is_recurring recurrence_rule
+                id user_phone title description status priority
+                remind_at due_date completed_at accountability metadata
                 created_at updated_at
             }
         }
         """
         data = await self._execute(query, {"before": before.isoformat()})
-        return [Schedule(**s) for s in data.get("schedule", [])]
 
-    # Chat operations
+        schedules = []
+        for t in data.get("tasks", []):
+            acc = t.get("accountability") or {}
+            schedules.append(Schedule(
+                id=t.get("id"),
+                phone_number=t.get("user_phone"),
+                call_time=t.get("remind_at"),
+                context=t.get("title"),
+                call_status=t.get("status"),
+                reminder_sent=False,
+                follow_up_count=acc.get("reminder_count", 0),
+                created_at=t.get("created_at"),
+                updated_at=t.get("updated_at"),
+            ))
+        return schedules
+
+    # Chat operations - using conversations table (v2)
     async def save_chat(self, chat: Chat) -> Chat:
         query = """
-        mutation SaveChat($object: chats_insert_input!) {
-            insert_chats_one(object: $object) {
-                id phone_no chat type created_at updated_at
+        mutation SaveChat($object: conversations_insert_input!) {
+            insert_conversations_one(object: $object) {
+                id user_phone direction message timestamp
             }
         }
         """
+        # Map chat type to direction
+        direction = "incoming" if chat.type == "user" else "outgoing"
         obj = {
-            "phone_no": chat.phone_no,
-            "chat": chat.chat,
-            "type": chat.type,
+            "user_phone": chat.phone_no,
+            "message": chat.chat,
+            "direction": direction,
         }
         data = await self._execute(query, {"object": obj})
-        return Chat(**data["insert_chats_one"])
+        c = data["insert_conversations_one"]
+        return Chat(
+            id=c.get("id"),
+            phone_no=c.get("user_phone"),
+            chat=c.get("message"),
+            type="user" if c.get("direction") == "incoming" else "donna",
+            created_at=c.get("timestamp"),
+        )
 
     async def get_chats(self, phone: str, limit: int = 20) -> List[Chat]:
         query = """
         query GetChats($phone: String!, $limit: Int!) {
-            chats(
-                where: {phone_no: {_eq: $phone}},
-                order_by: {created_at: desc},
+            conversations(
+                where: {user_phone: {_eq: $phone}},
+                order_by: {timestamp: desc},
                 limit: $limit
             ) {
-                id phone_no chat type created_at updated_at
+                id user_phone direction message timestamp
             }
         }
         """
         data = await self._execute(query, {"phone": phone, "limit": limit})
         # Reverse to get chronological order
-        chats = data.get("chats", [])
-        return [Chat(**c) for c in reversed(chats)]
+        convs = data.get("conversations", [])
+        chats = []
+        for c in reversed(convs):
+            chats.append(Chat(
+                id=c.get("id"),
+                phone_no=c.get("user_phone"),
+                chat=c.get("message"),
+                type="user" if c.get("direction") == "incoming" else "donna",
+                created_at=c.get("timestamp"),
+            ))
+        return chats
 
     async def delete_chats(self, phone: str) -> int:
         query = """
         mutation DeleteChats($phone: String!) {
-            delete_chats(where: {phone_no: {_eq: $phone}}) {
+            delete_conversations(where: {user_phone: {_eq: $phone}}) {
                 affected_rows
             }
         }
         """
         data = await self._execute(query, {"phone": phone})
-        return data.get("delete_chats", {}).get("affected_rows", 0)
+        return data.get("delete_conversations", {}).get("affected_rows", 0)
 
     # Entity operations (people, places, things)
     async def upsert_entity(

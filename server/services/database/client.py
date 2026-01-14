@@ -147,12 +147,12 @@ class NhostClient(DatabaseClient):
         users = data.get("donna_users", [])
         if users:
             u = users[0]
-            # Map v2 fields to User model
+            # Map v2 fields to User model (use 'phone' not 'phone_no')
             return User(
                 id=u.get("id"),
-                phone_no=u.get("phone"),
+                phone=u.get("phone"),
                 name=u.get("name"),
-                timezone=u.get("timezone"),
+                timezone=u.get("timezone") or "Asia/Kolkata",
                 created_at=u.get("created_at"),
                 updated_at=u.get("updated_at"),
             )
@@ -167,7 +167,7 @@ class NhostClient(DatabaseClient):
         }
         """
         obj = {
-            "phone": user.phone_no,
+            "phone": user.phone,  # Use user.phone (v2 model field)
             "name": user.name,
             "timezone": user.timezone or "Asia/Kolkata",
         }
@@ -175,9 +175,9 @@ class NhostClient(DatabaseClient):
         u = data["insert_donna_users_one"]
         return User(
             id=u.get("id"),
-            phone_no=u.get("phone"),
+            phone=u.get("phone"),
             name=u.get("name"),
-            timezone=u.get("timezone"),
+            timezone=u.get("timezone") or "Asia/Kolkata",
             created_at=u.get("created_at"),
             updated_at=u.get("updated_at"),
         )
@@ -210,9 +210,9 @@ class NhostClient(DatabaseClient):
             u = returning[0]
             return User(
                 id=u.get("id"),
-                phone_no=u.get("phone"),
+                phone=u.get("phone"),
                 name=u.get("name"),
-                timezone=u.get("timezone"),
+                timezone=u.get("timezone") or "Asia/Kolkata",
                 created_at=u.get("created_at"),
                 updated_at=u.get("updated_at"),
             )

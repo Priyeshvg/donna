@@ -1,0 +1,35 @@
+# Donna AI Deployment Info
+# Keep this file for reference
+
+## EC2 Instance
+SSH_KEY=~/Downloads/donna-ai-key.pem
+EC2_IP=13.127.55.121
+EC2_USER=ubuntu
+
+## SSH Command
+# ssh -i ~/Downloads/donna-ai-key.pem ubuntu@13.127.55.121
+
+## Service
+SERVICE_NAME=donna-ai
+# sudo systemctl restart donna-ai
+# sudo systemctl status donna-ai
+# sudo journalctl -u donna-ai -f
+
+## Deploy Command (no git on server, use scp)
+## IMPORTANT: App runs from /opt/donna-ai NOT /home/ubuntu/donna-ai
+# scp -i ~/Downloads/donna-ai-key.pem <local-file> ubuntu@13.127.55.121:/opt/donna-ai/<path>
+
+## App Directory (CORRECT PATH!)
+APP_DIR=/opt/donna-ai
+
+## Quick deploy all donna agent files:
+# scp -i ~/Downloads/donna-ai-key.pem server/agents/donna/execution/agents.py ubuntu@13.127.55.121:/opt/donna-ai/server/agents/donna/execution/
+# scp -i ~/Downloads/donna-ai-key.pem server/agents/donna/interaction/*.py server/agents/donna/interaction/*.md ubuntu@13.127.55.121:/opt/donna-ai/server/agents/donna/interaction/
+# scp -i ~/Downloads/donna-ai-key.pem server/agents/donna/*.py server/agents/donna/*.md ubuntu@13.127.55.121:/opt/donna-ai/server/agents/donna/
+# ssh -i ~/Downloads/donna-ai-key.pem ubuntu@13.127.55.121 "sudo systemctl restart donna-ai"
+
+## Logs
+# ssh -i ~/Downloads/donna-ai-key.pem ubuntu@13.127.55.121 "sudo journalctl -u donna-ai --since '5 minutes ago' --no-pager"
+
+## Database
+NHOST_GRAPHQL=https://pggodfdtrgjqaivvqsnb.hasura.ap-south-1.nhost.run/v1/graphql

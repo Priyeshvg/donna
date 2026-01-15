@@ -103,30 +103,38 @@ class ReminderScheduler:
             logger.error(f"Failed to send reminder {reminder.id}")
 
     def _format_reminder_message(self, reminder: Schedule) -> str:
-        """Format the reminder message."""
-        # Get importance emoji
-        emoji = {
-            "high": "🔴",
-            "medium": "🟡",
-            "low": "🟢"
-        }.get(reminder.importance, "⏰")
+        """Format the reminder message - Donna style, not robotic."""
+        # Just the task - simple and direct like Donna would text
+        context = reminder.context or "Reminder"
 
-        # Format time nicely
-        if reminder.call_time:
-            time_str = reminder.call_time.strftime("%I:%M %p")
+        # Escalating messages based on follow-up count
+        follow_up = reminder.follow_up_count or 0
+
+        if follow_up == 0:
+            # First reminder - direct and helpful
+            messages = [
+                f"Hey, time for: {context}",
+                f"📝 {context}",
+                f"Quick reminder: {context}",
+            ]
+        elif follow_up == 1:
+            messages = [
+                f"Did you get to this? {context}",
+                f"Still on your list: {context}",
+            ]
+        elif follow_up == 2:
+            messages = [
+                f"Third time's the charm? {context}",
+                f"Checking in again: {context}",
+            ]
         else:
-            time_str = "now"
+            messages = [
+                f"Real talk - should I drop this? {context}",
+                f"Last check: {context} - still want this reminder?",
+            ]
 
-        # Build message
-        message = f"{emoji} Reminder ({time_str})\n\n{reminder.context}"
-
-        # Add rich context if available
-        if reminder.rich_context:
-            notes = reminder.rich_context.get("notes", [])
-            if notes:
-                message += f"\n\nNotes: {', '.join(notes)}"
-
-        return message
+        import random
+        return random.choice(messages)
 
     async def _schedule_next_occurrence(self, reminder: Schedule):
         """Schedule next occurrence for recurring reminder."""

@@ -266,6 +266,25 @@ async def _handle_reminder(
 
         return {"success": False, "error": "No updates provided"}
 
+    elif action == "complete":
+        reminder_id = params.get("id")
+        if not reminder_id:
+            return {"success": False, "error": "Missing reminder id"}
+
+        from datetime import datetime
+        await db_v2.update_task(reminder_id, {
+            "status": TaskStatus.COMPLETED.value,
+            "completed_at": datetime.utcnow().isoformat(),
+        })
+        # Log the completion interaction
+        await db_v2.log_interaction(TaskInteraction(
+            user_phone=phone,
+            task_id=reminder_id,
+            type=InteractionType.COMPLETED,
+            context=InteractionContext.DIRECT,
+        ))
+        return {"success": True, "status": "completed"}
+
     elif action == "delete":
         reminder_id = params.get("id")
         if reminder_id:

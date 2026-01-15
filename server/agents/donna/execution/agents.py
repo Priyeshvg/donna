@@ -18,6 +18,7 @@ import os
 
 # IST timezone offset (UTC+5:30)
 IST = timezone(timedelta(hours=5, minutes=30))
+UTC = timezone.utc
 
 
 def _get_ist_now() -> datetime:
@@ -25,19 +26,32 @@ def _get_ist_now() -> datetime:
     return datetime.now(IST)
 
 
+def _ist_to_utc(dt: datetime) -> datetime:
+    """Convert IST datetime to UTC for storage."""
+    if dt.tzinfo is None:
+        # Assume naive datetime is IST
+        dt = dt.replace(tzinfo=IST)
+    return dt.astimezone(UTC).replace(tzinfo=None)  # Store as naive UTC
+
+
+def _utc_to_ist(dt: datetime) -> datetime:
+    """Convert UTC datetime to IST for display."""
+    if dt.tzinfo is None:
+        # Assume naive datetime is UTC
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(IST)
+
+
 def _format_ist_time(dt: datetime) -> str:
     """Format datetime for display in IST."""
-    if dt.tzinfo is None:
-        # Assume it's already IST if no timezone
-        ist_dt = dt
-    else:
-        ist_dt = dt.astimezone(IST)
+    ist_dt = _utc_to_ist(dt)
     return ist_dt.strftime("%I:%M %p").lstrip("0").lower()  # e.g., "9:00 pm"
 
 
 def _parse_time(time_str: str) -> Optional[datetime]:
     """Parse various time formats into datetime.
 
+    User input is interpreted as IST, but we return UTC for storage.
     Supports:
     - ISO format: 2024-01-14T21:00:00
     - Time only: 9pm, 9:00pm, 21:00, 9:30 pm
@@ -48,11 +62,12 @@ def _parse_time(time_str: str) -> Optional[datetime]:
         return None
 
     time_str = time_str.strip().lower()
-    now = _get_ist_now()  # Use IST for parsing user times
+    now_ist = _get_ist_now()  # Use IST for parsing user times
 
     # Try ISO format first
     try:
-        return datetime.fromisoformat(time_str)
+        parsed = datetime.fromisoformat(time_str)
+        return _ist_to_utc(parsed)  # Convert to UTC
     except ValueError:
         pass
 
@@ -62,9 +77,10 @@ def _parse_time(time_str: str) -> Optional[datetime]:
         amount = int(relative_match.group(1))
         unit = relative_match.group(2)
         if 'hour' in unit or 'hr' in unit:
-            return now + timedelta(hours=amount)
+            result = now_ist + timedelta(hours=amount)
         else:
-            return now + timedelta(minutes=amount)
+            result = now_ist + timedelta(minutes=amount)
+        return _ist_to_utc(result)  # Convert to UTC
 
     # Check for "tomorrow" prefix
     is_tomorrow = False
@@ -74,8 +90,8 @@ def _parse_time(time_str: str) -> Optional[datetime]:
         time_str = re.sub(r'^tomorrow\s*(at\s*)?', '', time_str).strip()
         # If nothing left after removing tomorrow, default to 9am
         if not time_str:
-            result = now.replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
-            return result
+            result = now_ist.replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            return _ist_to_utc(result)  # Convert to UTC
 
     # Try time only formats (9pm, 9:00pm, 21:00, 7 pm, etc.)
     time_match = re.match(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)?', time_str)
@@ -90,16 +106,16 @@ def _parse_time(time_str: str) -> Optional[datetime]:
         elif period == 'am' and hour == 12:
             hour = 0
 
-        result = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        result = now_ist.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
         # If tomorrow flag set, always add a day
         if is_tomorrow:
             result += timedelta(days=1)
         # Otherwise, if time has passed today, schedule for tomorrow
-        elif result <= now:
+        elif result <= now_ist:
             result += timedelta(days=1)
 
-        return result
+        return _ist_to_utc(result)  # Convert to UTC
 
     return None
 

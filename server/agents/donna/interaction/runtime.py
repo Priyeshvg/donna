@@ -13,6 +13,7 @@ from ....services.database import get_database_client, User, Chat
 from ....services.memory import get_memory_client
 from .agent import build_system_prompt, prepare_message
 from .tools import get_tool_schemas, handle_tool_call
+from ..execution import execute_agent_task
 
 
 class InteractionRuntime:
@@ -38,7 +39,7 @@ class InteractionRuntime:
         Returns:
             Dict with:
             - whatsapp_messages: List of messages to send to user
-            - agent_tasks: List of tasks to dispatch to execution agents
+            - agent_tasks: List of tasks already executed
         """
         # Build the messages for LLM
         messages = prepare_message(
@@ -50,7 +51,7 @@ class InteractionRuntime:
         )
 
         whatsapp_messages = []
-        agent_tasks = []
+        executed_tasks = []
 
         # For simple greetings, skip tools entirely and use Haiku (10x faster)
         is_simple = is_simple_message(message)
@@ -94,16 +95,30 @@ class InteractionRuntime:
                     if result.whatsapp_message:
                         whatsapp_messages.append(result.whatsapp_message)
 
-                    # Collect agent tasks
+                    # Execute agent tasks INLINE so LLM can see results
                     if result.agent_task:
-                        agent_tasks.append(result.agent_task)
+                        task_result = await execute_agent_task(
+                            self.phone, self.user, result.agent_task
+                        )
+                        logger.info(f"Agent task result: {task_result}")
+                        executed_tasks.append({
+                            "task": result.agent_task,
+                            "result": task_result,
+                        })
 
-                    # Add tool result to messages
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call["id"],
-                        "content": json.dumps(result.payload)
-                    })
+                        # Feed result back to LLM
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call["id"],
+                            "content": json.dumps(task_result)
+                        })
+                    else:
+                        # Non-agent tool call - use original payload
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call["id"],
+                            "content": json.dumps(result.payload)
+                        })
 
             elif finish_reason == "stop":
                 # Check for direct text response
@@ -118,5 +133,5 @@ class InteractionRuntime:
 
         return {
             "whatsapp_messages": whatsapp_messages,
-            "agent_tasks": agent_tasks,
+            "agent_tasks": executed_tasks,  # Already executed, just for logging
         }

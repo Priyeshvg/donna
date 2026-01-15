@@ -100,13 +100,9 @@ class DonnaRuntimeV2:
             memories=[],  # LLM will search if needed via tools
         )
 
-        # 4. Execute any dispatched agent tasks
+        # 4. Agent tasks already executed inline by interaction runtime
         whatsapp_messages = interaction_result.get("whatsapp_messages", [])
-        agent_tasks = interaction_result.get("agent_tasks", [])
-
-        for task in agent_tasks:
-            result = await execute_agent_task(self.phone, self.user, task)
-            logger.info(f"Agent task result: {result}")
+        # agent_tasks are already executed, just logged for debugging
 
         # 5. Send WhatsApp messages and save to chat history
         responses = []

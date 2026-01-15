@@ -50,11 +50,18 @@ TOOL_SCHEMAS = [
                     },
                     "action": {
                         "type": "string",
-                        "description": "What action to perform (create, search, delete, etc.)"
+                        "description": "What action to perform. For reminder: create, update, delete, list. For memory: store, search."
                     },
                     "params": {
                         "type": "object",
-                        "description": "Parameters for the action"
+                        "description": "Parameters for the action. For reminder.create: {task: 'what to do', time: 'when (e.g. 9pm, tomorrow 7pm, in 5 mins)'}. For reminder.update: {id: 'task_id', time: 'new time'}. For memory.store: {content: 'what to remember'}. For memory.search: {query: 'what to search for'}.",
+                        "properties": {
+                            "task": {"type": "string", "description": "Description of the task/reminder"},
+                            "time": {"type": "string", "description": "When to remind (e.g. '9pm', 'tomorrow 7pm', 'in 5 mins')"},
+                            "id": {"type": "string", "description": "Task ID for updates"},
+                            "content": {"type": "string", "description": "Content to store in memory"},
+                            "query": {"type": "string", "description": "Search query for memory"}
+                        }
                     }
                 },
                 "required": ["agent", "action"]

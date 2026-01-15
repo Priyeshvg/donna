@@ -1,13 +1,38 @@
 """Donna Execution Agents - handle reminders, memory, calendar, etc."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import re
 from typing import Any, Dict, Optional
 
 from ....logging_config import logger
 from ....services.database import get_database_client, Schedule, User
+from ....services.database.client_v2 import NhostClientV2
+from ....services.database.models import (
+    Task, TaskStatus, ScheduledTrigger, TriggerType,
+    TaskInteraction, InteractionType, InteractionContext
+)
 from ....services.memory import get_memory_client
 from ....services.calendar import get_calendar_client
+import os
+
+
+# IST timezone offset (UTC+5:30)
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _get_ist_now() -> datetime:
+    """Get current time in IST."""
+    return datetime.now(IST)
+
+
+def _format_ist_time(dt: datetime) -> str:
+    """Format datetime for display in IST."""
+    if dt.tzinfo is None:
+        # Assume it's already IST if no timezone
+        ist_dt = dt
+    else:
+        ist_dt = dt.astimezone(IST)
+    return ist_dt.strftime("%I:%M %p").lstrip("0").lower()  # e.g., "9:00 pm"
 
 
 def _parse_time(time_str: str) -> Optional[datetime]:
@@ -17,12 +42,13 @@ def _parse_time(time_str: str) -> Optional[datetime]:
     - ISO format: 2024-01-14T21:00:00
     - Time only: 9pm, 9:00pm, 21:00, 9:30 pm
     - Relative: in 2 mins, in 5 minutes, in 1 hour
+    - Tomorrow: tomorrow 7pm, tomorrow at 9:00
     """
     if not time_str:
         return None
 
     time_str = time_str.strip().lower()
-    now = datetime.now()
+    now = _get_ist_now()  # Use IST for parsing user times
 
     # Try ISO format first
     try:
@@ -40,7 +66,18 @@ def _parse_time(time_str: str) -> Optional[datetime]:
         else:
             return now + timedelta(minutes=amount)
 
-    # Try time only formats (9pm, 9:00pm, 21:00, etc.)
+    # Check for "tomorrow" prefix
+    is_tomorrow = False
+    if time_str.startswith('tomorrow'):
+        is_tomorrow = True
+        # Remove "tomorrow" and optional "at" from the string
+        time_str = re.sub(r'^tomorrow\s*(at\s*)?', '', time_str).strip()
+        # If nothing left after removing tomorrow, default to 9am
+        if not time_str:
+            result = now.replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            return result
+
+    # Try time only formats (9pm, 9:00pm, 21:00, 7 pm, etc.)
     time_match = re.match(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)?', time_str)
     if time_match:
         hour = int(time_match.group(1))
@@ -55,8 +92,11 @@ def _parse_time(time_str: str) -> Optional[datetime]:
 
         result = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
-        # If time has passed today, schedule for tomorrow
-        if result <= now:
+        # If tomorrow flag set, always add a day
+        if is_tomorrow:
+            result += timedelta(days=1)
+        # Otherwise, if time has passed today, schedule for tomorrow
+        elif result <= now:
             result += timedelta(days=1)
 
         return result
@@ -101,19 +141,29 @@ async def execute_agent_task(
         return {"success": False, "error": str(e)}
 
 
+def _get_db_v2() -> NhostClientV2:
+    """Get v2 database client."""
+    return NhostClientV2(
+        endpoint=os.getenv("NHOST_HASURA_URL_V2") or os.getenv("NHOST_HASURA_URL") or os.getenv("NHOST_GRAPHQL_ENDPOINT"),
+        admin_secret=os.getenv("NHOST_ADMIN_SECRET")
+    )
+
+
 async def _handle_reminder(
     phone: str,
     user: User,
     action: str,
     params: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """Handle reminder actions."""
+    """Handle reminder actions using v2 database."""
     db = get_database_client()
+    db_v2 = _get_db_v2()
 
     if action == "create":
         # Create a reminder
         call_time_str = params.get("time")
-        context = params.get("context", "Reminder")
+        # Accept both 'task' (new) and 'context' (old) for task description
+        task_description = params.get("task") or params.get("context") or "Reminder"
 
         if not call_time_str:
             return {"success": False, "error": "Missing time parameter"}
@@ -122,45 +172,95 @@ async def _handle_reminder(
         if not call_time:
             return {"success": False, "error": f"Could not parse time: {call_time_str}"}
 
-        schedule = Schedule(
-            phone_number=phone,
-            context=context,
-            call_time=call_time,
-            importance=params.get("importance", "medium"),
-            reminder_method="whatsapp",
-            call_status="pending",
-            task_status="pending"
+        # Use v2 Task model
+        task = Task(
+            user_phone=phone,
+            title=task_description,
+            status=TaskStatus.PENDING,
+            remind_at=call_time,
         )
-        created = await db.create_schedule(schedule)
+        created = await db_v2.create_task(task)
+
+        # Create scheduled trigger for the reminder
+        await db_v2.create_trigger(ScheduledTrigger(
+            user_phone=phone,
+            trigger_type=TriggerType.TASK_REMINDER,
+            task_id=created.id,
+            trigger_at=call_time,
+            status="pending",
+        ))
+
+        # Log the interaction
+        await db_v2.log_interaction(TaskInteraction(
+            user_phone=phone,
+            task_id=created.id,
+            type=InteractionType.CREATED,
+            context=InteractionContext.DIRECT,
+        ))
 
         # Increment usage count
         await _increment_usage(phone, user, "reminder_count")
 
+        # Format time nicely for display (e.g., "9:00 pm" instead of ISO)
+        friendly_time = _format_ist_time(call_time)
+
         return {
             "success": True,
             "reminder_id": created.id,
-            "time": call_time.isoformat(),
-            "context": context
+            "time": friendly_time,
+            "time_iso": call_time.isoformat(),
+            "task": task_description
         }
 
     elif action == "list":
-        schedules = await db.get_schedules(phone, "pending")
+        # Use v2 to get tasks
+        tasks = await db_v2.get_pending_tasks(phone)
         reminders = [
             {
-                "id": s.id,
-                "context": s.context,
-                "time": s.call_time.isoformat() if s.call_time else None,
+                "id": t.id,
+                "task": t.title,
+                "time": _format_ist_time(t.remind_at) if t.remind_at else None,
             }
-            for s in schedules
+            for t in tasks
         ]
         return {"success": True, "reminders": reminders}
+
+    elif action == "update":
+        reminder_id = params.get("id")
+        if not reminder_id:
+            return {"success": False, "error": "Missing reminder id"}
+
+        updates = {}
+
+        # Update time if provided
+        if params.get("time"):
+            new_time = _parse_time(params.get("time"))
+            if new_time:
+                updates["remind_at"] = new_time.isoformat()
+                # Also update the trigger
+                # TODO: Update scheduled_trigger time as well
+
+        # Update task description if provided
+        if params.get("task"):
+            updates["title"] = params.get("task")
+
+        if updates:
+            await db_v2.update_task(reminder_id, updates)
+            return {"success": True, "updated": updates}
+
+        return {"success": False, "error": "No updates provided"}
 
     elif action == "delete":
         reminder_id = params.get("id")
         if reminder_id:
-            await db.update_schedule(reminder_id, {"call_status": "cancelled"})
-        else:
-            await db.delete_schedules(phone)
+            await db_v2.update_task(reminder_id, {"status": TaskStatus.DROPPED.value})
+            # Log the drop interaction
+            await db_v2.log_interaction(TaskInteraction(
+                user_phone=phone,
+                task_id=reminder_id,
+                type=InteractionType.DROPPED,
+                context=InteractionContext.DIRECT,
+            ))
         return {"success": True}
 
     else:

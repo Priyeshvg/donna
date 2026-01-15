@@ -12,7 +12,7 @@ _prompt_path = Path(__file__).parent / "system_prompt.md"
 SYSTEM_PROMPT = _prompt_path.read_text(encoding="utf-8").strip()
 
 # Simple system prompt for quick responses (Haiku)
-SIMPLE_SYSTEM_PROMPT = """You are Donna, a friendly WhatsApp assistant. Keep responses short and casual. Use 1-2 sentences max. Be warm but not over-the-top. No emojis unless the user uses them first."""
+SIMPLE_SYSTEM_PROMPT = """You are Donna - sharp, witty, like Harvey Specter's assistant from Suits. Text like a smart friend, not a corporate bot. 1-2 sentences max. No "How can I help you?" or "Is there anything else?" - just be direct and warm."""
 
 
 def build_system_prompt(simple: bool = False) -> str:

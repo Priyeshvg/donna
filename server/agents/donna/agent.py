@@ -962,7 +962,7 @@ class DonnaAgent:
             user_phone=self.phone,
             task_id=created.id,
             type=InteractionType.CREATED,
-            context=InteractionContext.USER_REQUEST,
+            context=InteractionContext.DIRECT,
         ))
 
         # Format time for response (IST)
@@ -1004,8 +1004,9 @@ class DonnaAgent:
         metric = None
         if args.get("metric_unit"):
             metric = RecurringMetric(
+                type=args.get("metric_type", "count"),
                 unit=args["metric_unit"],
-                goal=args.get("metric_goal", 0),
+                target=args.get("metric_goal", 0),
             )
         elif pattern and pattern.get("metric"):
             metric = RecurringMetric(**pattern["metric"])
@@ -1039,7 +1040,7 @@ class DonnaAgent:
             times_per_day=times_per_day,
             schedule=RecurringSchedule(
                 times=reminder_times,
-                days_of_week=None,  # All days for daily
+                days=[1, 2, 3, 4, 5, 6, 7],  # All days for daily
             ),
             streak_current=0,
             streak_best=0,
@@ -1054,7 +1055,7 @@ class DonnaAgent:
             user_phone=self.phone,
             recurring_task_id=created.id,
             type=InteractionType.CREATED,
-            context=InteractionContext.USER_REQUEST,
+            context=InteractionContext.DIRECT,
         ))
 
         # Format response
@@ -1118,7 +1119,7 @@ class DonnaAgent:
                 user_phone=self.phone,
                 task_id=task.id,
                 type=InteractionType.COMPLETED,
-                context=InteractionContext.USER_REQUEST,
+                context=InteractionContext.DIRECT,
             ))
 
             return {
@@ -1149,7 +1150,7 @@ class DonnaAgent:
                 user_phone=self.phone,
                 recurring_task_id=recurring_task.id,
                 type=InteractionType.COMPLETED,
-                context=InteractionContext.USER_REQUEST,
+                context=InteractionContext.DIRECT,
             ))
 
             # Get updated task for streak info
@@ -1192,7 +1193,7 @@ class DonnaAgent:
                 user_phone=self.phone,
                 task_id=task.id,
                 type=InteractionType.DROPPED,
-                context=InteractionContext.USER_REQUEST,
+                context=InteractionContext.DIRECT,
             ))
 
             return {
@@ -1264,7 +1265,7 @@ class DonnaAgent:
                 user_phone=self.phone,
                 task_id=task.id,
                 type=InteractionType.SNOOZED,
-                context=InteractionContext.USER_REQUEST,
+                context=InteractionContext.DIRECT,
             ))
 
             return {

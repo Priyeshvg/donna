@@ -82,7 +82,8 @@ class DonnaRuntimeV2:
         ))
         session_task = self._get_session_context()
 
-        self.user, _, session = await asyncio.gather(user_task, save_task, session_task)
+        user_result, _, session = await asyncio.gather(user_task, save_task, session_task)
+        self.user, is_new_user = user_result
 
         # 2. Get chat history (prefer Redis session, fallback to DB)
         if session and session.get("messages"):
@@ -107,6 +108,23 @@ class DonnaRuntimeV2:
         # 5. Send WhatsApp messages and save to chat history
         responses = []
         whatsapp = get_whatsapp_client()
+
+        # Send welcome messages for new users FIRST
+        if is_new_user:
+            user_name = self.user.name or "there"
+            welcome_msgs = [
+                f"Hi {user_name} 👋, I'm Donna — your assistant who gets things done 💅",
+                "I handle reminders ⏰, memory 🧠, and keeping you on track 💬\nTry me now 😉"
+            ]
+            for welcome_msg in welcome_msgs:
+                await self.db.save_chat(Chat(
+                    phone_no=self.phone,
+                    chat=welcome_msg,
+                    type="sent"
+                ))
+                if whatsapp:
+                    await whatsapp.send_text(self.phone, welcome_msg)
+                responses.append({"type": "text", "message": welcome_msg})
 
         for msg in whatsapp_messages:
             # Save to chat history
@@ -141,16 +159,21 @@ class DonnaRuntimeV2:
             "responses": responses,
         }
 
-    async def _ensure_user(self, profile_name: Optional[str] = None) -> User:
-        """Load existing user (cached) or create new one."""
+    async def _ensure_user(self, profile_name: Optional[str] = None) -> tuple[User, bool]:
+        """Load existing user (cached) or create new one.
+
+        Returns:
+            Tuple of (user, is_new_user)
+        """
         # Check cache first
         cached = _get_cached_user(self.phone)
         if cached:
             logger.debug(f"User cache hit for {self.phone}")
-            return cached
+            return cached, False
 
         # Load from DB
         user = await self.db.get_user(self.phone)
+        is_new = False
 
         if not user:
             user = User(
@@ -159,10 +182,11 @@ class DonnaRuntimeV2:
             )
             user = await self.db.create_user(user)
             logger.info(f"Created new user: {self.phone}")
+            is_new = True
 
         # Cache for future requests
         _cache_user(self.phone, user)
-        return user
+        return user, is_new
 
     async def _get_chat_history(self, limit: int = 20) -> List[Dict[str, str]]:
         """Get recent chat history from database."""

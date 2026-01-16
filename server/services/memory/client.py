@@ -94,10 +94,37 @@ class MemoryClient:
     CATEGORIES = {
         "contact": ["number", "phone", "email", "address", "mobile"],
         "event": ["birthday", "anniversary", "meeting", "appointment"],
-        "preference": ["prefers", "likes", "dislikes", "wants", "favorite"],
-        "relationship": ["is my", "are my", "wife", "husband", "friend", "colleague", "boss"],
+        "preference": ["prefers", "likes", "dislikes", "wants", "favorite", "loves"],
+        "relationship": ["is my", "are my", "wife", "husband", "friend", "colleague", "boss", "girlfriend", "boyfriend"],
         "fact": [],  # Default category
     }
+
+    # Categories that should deduplicate (same entity+category+type = same vector)
+    # Empty set = all categories allow multiple vectors per entity
+    # Deduplication now happens at content level (same content = same vector)
+    DEDUPE_CATEGORIES = set()  # No automatic deduping - allow multiple of everything
+
+    # Temporal keywords for detecting current vs old information
+    TEMPORAL_CURRENT = ["new", "current", "now", "updated", "latest", "changed to"]
+    TEMPORAL_OLD = ["old", "previous", "former", "was", "used to be", "no longer"]
+
+    def _detect_temporal_status(self, content: str) -> Optional[bool]:
+        """Detect if content refers to current or old information.
+
+        Returns:
+            True if current/new, False if old/previous, None if not specified
+        """
+        content_lower = content.lower()
+
+        for keyword in self.TEMPORAL_CURRENT:
+            if keyword in content_lower:
+                return True
+
+        for keyword in self.TEMPORAL_OLD:
+            if keyword in content_lower:
+                return False
+
+        return None  # No temporal indicator
 
     def _detect_category(self, content: str) -> str:
         """Detect the memory category from content."""
@@ -116,12 +143,14 @@ class MemoryClient:
 
         content_lower = content.lower()
 
-        # Pattern: "X's number/phone/birthday/email is Y"
+        # Patterns to extract entity names
         patterns = [
-            r"(\w+)'s\s+(number|phone|birthday|email|address)",
-            r"(\w+)\s+(number|phone|birthday|email)\s+is",
+            r"(\w+)'s\s+(number|phone|birthday|email|address)",  # "Purvi's phone"
+            r"(\w+)\s+(number|phone|birthday|email)\s+is",  # "Purvi phone is"
             r"(my\s+\w+)'s",  # "my mom's birthday"
             r"^(\w+)\s+is\s+",  # "Akash is my friend"
+            r"^(\w+)\s+(loves?|likes?|prefers?|wants?|hates?|dislikes?)\s+",  # "Purvi loves waffles"
+            r"^(\w+)\s+(favorite|favourite)\s+",  # "Purvi favorite color"
         ]
 
         for pattern in patterns:
@@ -132,10 +161,19 @@ class MemoryClient:
         return None
 
     def _generate_semantic_id(self, phone: str, content: str, metadata: Optional[Dict[str, Any]]) -> str:
-        """Generate a deterministic ID for semantic deduplication.
+        """Generate an ID for vector storage with content-based deduplication.
 
-        For content about the same entity (e.g., "Akash's phone"), we want
-        the same ID so updates overwrite instead of duplicating.
+        Deduplication is based on content similarity:
+        - Same/very similar content about same entity = same vector (updates)
+        - Different content about same entity = different vectors (allows multiple)
+
+        This allows storing multiple items per entity:
+        - "Purvi's work phone is 123" + "Purvi's personal phone is 456" = 2 vectors
+        - "Purvi is my girlfriend" + "Purvi is my wife" = 2 vectors
+        - "Purvi's birthday is March 15" + "Purvi's anniversary is June 20" = 2 vectors
+
+        But prevents true duplicates:
+        - "Purvi loves waffles" stored twice = 1 vector (same content = same ID)
         """
         import hashlib
 
@@ -147,15 +185,21 @@ class MemoryClient:
         # Use metadata category if provided, otherwise detect from content
         category = meta.get("category") or self._detect_category(content)
 
-        # If we found an entity, create deterministic ID
+        # Generate content-based hash for deduplication
+        # Same content = same ID (prevents duplicates)
+        # Different content = different ID (allows multiple per entity)
+        content_normalized = content.lower().strip()
+        content_hash = hashlib.md5(content_normalized.encode()).hexdigest()[:12]
+
         if entity:
             entity = entity.lower()
-            # Create a hash from phone + entity + category
-            key = f"{phone}:{entity}:{category}"
-            return hashlib.md5(key.encode()).hexdigest()
+            # Include entity and category for better organization
+            key = f"{phone}:{entity}:{category}:{content_hash}"
+        else:
+            # No entity found, use phone + category + content
+            key = f"{phone}:{category}:{content_hash}"
 
-        # Fallback to random UUID for generic memories
-        return str(uuid.uuid4())
+        return hashlib.md5(key.encode()).hexdigest()
 
     async def store(
         self,
@@ -202,6 +246,13 @@ class MemoryClient:
                 if entity:
                     meta["entity"] = entity
 
+            # Auto-detect temporal status (is_current)
+            # True = current/new, False = old/previous, not set = unspecified
+            if "is_current" not in meta:
+                temporal_status = self._detect_temporal_status(content)
+                if temporal_status is not None:
+                    meta["is_current"] = temporal_status
+
             # Upsert to Pinecone (will update if ID exists)
             response = await self._client.post(
                 f"{self.base_url}/vectors/upsert",
@@ -233,6 +284,7 @@ class MemoryClient:
         phone: str,
         query: str,
         top_k: int = 10,
+        current_only: bool = False,
     ) -> List[Dict[str, Any]]:
         """Search vector memory for relevant content.
 
@@ -240,9 +292,11 @@ class MemoryClient:
             phone: User's phone number (namespace)
             query: Search query
             top_k: Number of results to return
+            current_only: If True, filter out results marked as old/previous
 
         Returns:
-            List of matching memories with scores
+            List of matching memories with scores, sorted by relevance
+            (current items are boosted in ranking)
         """
         try:
             # Ensure host is resolved
@@ -252,12 +306,15 @@ class MemoryClient:
             # Generate query embedding
             embedding = await self._get_embedding(query)
 
+            # Query Pinecone (fetch extra if filtering)
+            fetch_k = top_k * 2 if current_only else top_k
+
             # Query Pinecone
             response = await self._client.post(
                 f"{self.base_url}/query",
                 json={
                     "vector": embedding,
-                    "topK": top_k,
+                    "topK": fetch_k,
                     "includeMetadata": True,
                     "namespace": phone,
                 },
@@ -274,12 +331,35 @@ class MemoryClient:
                 metadata = match.get("metadata", {})
                 # Support both 'content' (new) and 'text' (legacy) fields
                 content = metadata.get("content") or metadata.get("text", "")
+
+                # Check temporal status
+                is_current = metadata.get("is_current")
+
+                # Skip old items if current_only is requested
+                if current_only and is_current is False:
+                    continue
+
+                # Calculate adjusted score (boost current items)
+                base_score = match["score"]
+                if is_current is True:
+                    adjusted_score = base_score * 1.1  # 10% boost for current
+                elif is_current is False:
+                    adjusted_score = base_score * 0.9  # 10% penalty for old
+                else:
+                    adjusted_score = base_score
+
                 results.append({
                     "id": match["id"],
-                    "score": match["score"],
+                    "score": base_score,
+                    "adjusted_score": adjusted_score,
                     "content": content,
+                    "is_current": is_current,
                     "metadata": metadata,
                 })
+
+            # Sort by adjusted score and limit to top_k
+            results.sort(key=lambda x: x["adjusted_score"], reverse=True)
+            results = results[:top_k]
 
             logger.info(f"Found {len(results)} memories for query: {query[:50]}...")
             return results
